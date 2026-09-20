@@ -144,7 +144,7 @@ impl Board {
 
     pub fn result(&self) -> GameResult {
         if self.has_won(self.current_player) {
-            GameResult::Win(Player::Red)
+            GameResult::Win(self.current_player)
         } else if self.is_draw() {
             GameResult::Draw
         } else {
