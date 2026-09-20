@@ -53,8 +53,17 @@ impl Board {
         self.red.0 | self.yellow.0
     }
 
-    pub fn valid_moves(&self) -> u64 {
-        (self.occupied() + Self::BOTTOM_MASK) & Self::BOARD_MASK
+    pub fn valid_moves(&self) -> Vec<u8> {
+        let occupied = self.occupied();
+        let mut moves = Vec::new();
+        
+        for column in 0..7 {
+            let top = 1u64 << (column * 7 + 5);
+            if occupied & top == 0 {
+                moves.push(column as u8);
+            }
+        }
+        moves
     }
 
     pub fn place_piece(&mut self, column: u8) -> GameResult {
@@ -130,7 +139,7 @@ impl Board {
     }
 
     fn is_draw(&self) -> bool {
-        self.valid_moves() == 0
+        (self.occupied() + Self::BOTTOM_MASK) & Self::BOARD_MASK == 0
     }
 
     pub fn result(&self) -> GameResult {
