@@ -1,6 +1,6 @@
 mod board;
 mod env;
-//mod mcts;
+mod mcts;
 fn main() {
     println!("Hello, world!");
 }
