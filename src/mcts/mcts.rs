@@ -41,7 +41,7 @@ use crate::{board::GameResult, env::Connect4Env};
         fn new(state: Connect4Env, policy: StubPolicy, simulations: u32, c_puct: f32) -> Self {
         let mut root = Node::new(state);
         let (priors, _value) = policy.evaluate(root.state.state());
-        root.priors = priors;
+        root.priors = Self::normalize_priors(priors, &root.state.state().valid_moves());
 
         Self {
             nodes: vec![root],
@@ -59,7 +59,8 @@ use crate::{board::GameResult, env::Connect4Env};
                         match self.nodes[child_idx].state.state().result() {
                             GameResult::Ongoing => {
                                 let (policy, value) = self.policy.evaluate(self.nodes[child_idx].state.state());
-                                self.nodes[child_idx].priors = policy;
+                                let valid_moves = self.nodes[child_idx].state.state().valid_moves();
+                                self.nodes[child_idx].priors = Self::normalize_priors(policy, &valid_moves);
                                 self.backpropagate(child_idx, value);
                             }
                             GameResult::Win(_) => {
@@ -168,6 +169,30 @@ use crate::{board::GameResult, env::Connect4Env};
                 }
             }
             best_action
+        }
+
+        fn normalize_priors(priors: [f32; 7], valid_moves: &[u8]) -> [f32; 7] {
+            let mut masked_priors = [0.0; 7];
+            let mut total = 0.0;
+
+            for &action in valid_moves {
+                let prior = priors[action as usize];
+                masked_priors[action as usize] = prior;
+                total += prior;
+            }
+
+            if total > 0.0 {
+                for prior in &mut masked_priors {
+                    *prior /= total;
+                }
+            } else {
+                let uniform_prior = 1.0 / valid_moves.len() as f32;
+                for &action in valid_moves {
+                    masked_priors[action as usize] = uniform_prior;
+                }
+            }
+
+            masked_priors
         }
 
         fn best_action(&self) -> usize {
