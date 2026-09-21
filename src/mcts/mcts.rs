@@ -33,17 +33,23 @@ use crate::{board::GameResult, env::Connect4Env};
     struct MCTS {
         nodes: Vec<Node>,
         policy: StubPolicy,
-        simulations: u32
+        simulations: u32,
+        c_puct: f32,
     }
 
     impl MCTS {
-        fn new(policy: StubPolicy, simulations: u32) -> Self {
-            Self { 
-                nodes: vec![Node::new(Connect4Env::new())],
-                policy,
-                simulations
-            }
+        fn new(state: Connect4Env, policy: StubPolicy, simulations: u32, c_puct: f32) -> Self {
+        let mut root = Node::new(state);
+        let (priors, _value) = policy.evaluate(root.state.state());
+        root.priors = priors;
+
+        Self {
+            nodes: vec![root],
+            policy,
+            simulations,
+            c_puct
         }
+    }
 
         fn search(&mut self) {
             for _ in 0..self.simulations {
@@ -85,7 +91,7 @@ use crate::{board::GameResult, env::Connect4Env};
                     return SelectionResult::Terminal { node_idx, result };
                 }
 
-                let action = self.puct(node_idx, 1.0);
+                let action = self.puct(node_idx);
 
                 match self.nodes[node_idx].children[action] {
                     Some(child_idx) => {
@@ -130,10 +136,10 @@ use crate::{board::GameResult, env::Connect4Env};
             }
         }
 
-        fn puct(&self, node_idx: usize, c: f32) -> usize {
+        fn puct(&self, node_idx: usize) -> usize {
             let node = &self.nodes[node_idx];
             let valid_moves = node.state.state().valid_moves();
-            let parent_visits = self.nodes[node_idx].visits as f32;
+            let parent_visits = self.nodes[node_idx].visits.max(1) as f32;
             let mut best_action = valid_moves[0] as usize;
             let mut best_score = f32::NEG_INFINITY;
 
@@ -153,7 +159,7 @@ use crate::{board::GameResult, env::Connect4Env};
                     }
                     None => (0.0, 0.0),
                 };
-                let u = c * prior * parent_visits.sqrt() / (1.0 + child_visits);
+                let u = self.c_puct * prior * parent_visits.sqrt() / (1.0 + child_visits);
                 let score = q + u;
 
                 if score > best_score {
@@ -162,5 +168,40 @@ use crate::{board::GameResult, env::Connect4Env};
                 }
             }
             best_action
+        }
+
+        fn best_action(&self) -> usize {
+            let root = &self.nodes[0];
+            root.children
+                .iter()
+                .enumerate()
+                .filter_map(|(action, child)| {
+                    child.map(|idx| (action, self.nodes[idx].visits))
+                })
+                .max_by_key(|&(_, visits)| visits)
+                .map(|(action, _)| action)
+                .expect("no valid actions")
+        }
+
+        fn root_policy(&self) -> [f32; 7] {
+            let root = &self.nodes[0];
+            let mut pi = [0.0; 7];
+            let total_visits: u32 = root.children
+                .iter()
+                .filter_map(|child| {
+                    child.map(|idx| self.nodes[idx].visits)
+                })
+                .sum();
+
+            if total_visits == 0 {
+                return pi;
+            }
+
+            for action in 0..7 {
+                if let Some(child_idx) = root.children[action] {
+                    pi[action] = self.nodes[child_idx].visits as f32 / total_visits as f32;
+                }
+            }
+            pi
         }
     }
