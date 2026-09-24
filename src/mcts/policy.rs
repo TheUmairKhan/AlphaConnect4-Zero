@@ -1,4 +1,5 @@
 use crate::board::Board;
+
 pub struct StubPolicy;
 
 impl StubPolicy {
