@@ -67,6 +67,7 @@ impl Board {
     }
 
     pub fn place_piece(&mut self, column: u8) -> GameResult {
+        let player = self.current_player;
 
         let shift = column as u64 * 7;
         let bottom = 1u64 << shift;
@@ -75,16 +76,14 @@ impl Board {
         
         debug_assert!(pos != 0, "attempted move in full column");
 
-        match self.current_player {
+        match player {
             Player::Red => self.red.0 |= pos,
             Player::Yellow => self.yellow.0 |= pos,
         }
 
         let result = self.result();
 
-        if matches!(result, GameResult::Ongoing) {
-            self.current_player = self.current_player.other();
-        }
+        self.current_player = player.other();
 
         result
     }
@@ -143,19 +142,25 @@ impl Board {
     }
 
     pub fn result(&self) -> GameResult {
-        if self.has_won(self.current_player) {
-            GameResult::Win(self.current_player)
+        if self.has_won(Player::Red) {
+            GameResult::Win(Player::Red)
+        } else if self.has_won(Player::Yellow) {
+            GameResult::Win(Player::Yellow)
         } else if self.is_draw() {
             GameResult::Draw
         } else {
             GameResult::Ongoing
         }
     }
+
+    pub fn current_player(&self) -> Player {
+        self.current_player
+    }
 }
 
 
 impl Player {
-    fn other(self) -> Player {
+    pub fn other(self) -> Player {
         match self {
             Player::Red => Player::Yellow,
             Player::Yellow => Player::Red,

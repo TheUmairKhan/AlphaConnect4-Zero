@@ -19,7 +19,6 @@ impl Connect4Env {
     }
 
     pub fn step(&mut self, action: u8) -> GameResult{
-        self.board.place_piece(action);
-        self.board.result()
+        self.board.place_piece(action)
     }
 }
