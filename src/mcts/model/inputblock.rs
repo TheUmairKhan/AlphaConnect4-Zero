@@ -22,14 +22,10 @@ pub struct InputBlockConfig {
 impl InputBlockConfig {
     pub fn init<B: Backend>(&self, device: &B::Device) -> InputBlock<B> {
         InputBlock { 
-            conv: Conv2dConfig::new(
-                [self.input_channels, self.hidden_size],
-                [3, 3]
-            )
-            .with_padding(burn::nn::PaddingConfig2d::Same)
-            .init(device),
-
-             bn: BatchNormConfig::new(self.hidden_size).init(device), 
+            conv: Conv2dConfig::new([self.input_channels, self.hidden_size], [3, 3])
+                .with_padding(burn::nn::PaddingConfig2d::Same)
+                .init(device),
+             bn: BatchNormConfig::new(self.hidden_size).init(device),
              relu: Relu::new()
         }
     }
