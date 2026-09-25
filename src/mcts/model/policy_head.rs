@@ -8,7 +8,7 @@ use burn::{
 };
 
 #[derive(Module, Debug)]
-struct PolicyHead<B: Backend> {
+pub struct PolicyHead<B: Backend> {
     conv: Conv2d<B>,
     bn: BatchNorm<B>,
     relu: Relu,
@@ -16,7 +16,7 @@ struct PolicyHead<B: Backend> {
 }
 
 #[derive(Config, Debug)]
-struct PolicyHeadConfig {
+pub struct PolicyHeadConfig {
     hidden_size: usize
 }
 
