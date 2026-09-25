@@ -1,11 +1,10 @@
 use burn::{
     nn::{
-        BatchNorm, BatchNormConfig, Relu,
         conv::{Conv2d, Conv2dConfig},
+        BatchNorm, BatchNormConfig, Relu,
     },
     prelude::*,
 };
-
 
 #[derive(Module, Debug)]
 pub struct ResBlock<B: Backend> {

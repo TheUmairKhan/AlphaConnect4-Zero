@@ -1,8 +1,7 @@
 use burn::{
     nn::{
-        BatchNorm, BatchNormConfig, Relu,
         conv::{Conv2d, Conv2dConfig},
-        Linear, LinearConfig
+        BatchNorm, BatchNormConfig, Linear, LinearConfig, Relu,
     },
     prelude::*,
 };
@@ -17,7 +16,7 @@ pub struct PolicyHead<B: Backend> {
 
 #[derive(Config, Debug)]
 pub struct PolicyHeadConfig {
-    hidden_size: usize
+    hidden_size: usize,
 }
 
 impl PolicyHeadConfig {
@@ -33,7 +32,7 @@ impl PolicyHeadConfig {
     }
 }
 
-impl <B:Backend> PolicyHead<B> {
+impl<B: Backend> PolicyHead<B> {
     pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 2> {
         let x = self.conv.forward(x);
         let x = self.bn.forward(x);

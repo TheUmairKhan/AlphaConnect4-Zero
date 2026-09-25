@@ -1,6 +1,6 @@
-use crate::mcts::model::policy_head::{PolicyHead, PolicyHeadConfig};
-use crate::mcts::model::resblock::{ResBlock, ResBlockConfig};
-use crate::mcts::model::value_head::{ValueHead, ValueHeadConfig};
+use crate::model::policy_head::{PolicyHead, PolicyHeadConfig};
+use crate::model::resblock::{ResBlock, ResBlockConfig};
+use crate::model::value_head::{ValueHead, ValueHeadConfig};
 use burn::{
     nn::{
         conv::{Conv2d, Conv2dConfig},
@@ -35,7 +35,7 @@ impl ZeroNetConfig {
             bn: BatchNormConfig::new(self.hidden_size).init(device),
             relu: Relu::new(),
             res_blocks: (0..self.num_res_blocks)
-                .map(|_| {ResBlockConfig::new(self.hidden_size).init(device)})
+                .map(|_| ResBlockConfig::new(self.hidden_size).init(device))
                 .collect(),
             policy_head: PolicyHeadConfig::new(self.hidden_size).init(device),
             value_head: ValueHeadConfig::new(self.hidden_size).init(device),
@@ -48,11 +48,10 @@ impl<B: Backend> ZeroNet<B> {
         let x = self.conv.forward(x);
         let x = self.bn.forward(x);
         let x = self.relu.forward(x);
-        let x = self.res_blocks
-            .iter()
-            .fold(x, |x, block| block.forward(x));
+        let x = self.res_blocks.iter().fold(x, |x, block| block.forward(x));
         let policy = self.policy_head.forward(x.clone());
         let value = self.value_head.forward(x);
+
         (policy, value)
     }
 }
