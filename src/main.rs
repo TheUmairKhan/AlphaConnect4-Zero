@@ -4,7 +4,7 @@ mod mcts;
 pub mod model;
 mod training;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    type Backend = burn::backend::Autodiff<burn::backend::NdArray<f32>>;
+    type Backend = burn::backend::Autodiff<burn::backend::Metal<f32>>;
 
     let path = std::env::args()
         .nth(1)

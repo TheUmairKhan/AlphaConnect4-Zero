@@ -5,7 +5,7 @@ use rand::{Rng, RngExt};
 use rand_distr::{Distribution, Gamma};
 
 use crate::{board::GameResult, env::Connect4Env};
-    use super::policy::ZeroNetPolicy;
+    use super::policy::{NetworkTiming, ZeroNetPolicy};
     struct Node {
         state: Connect4Env,
         parent: Option<usize>,
@@ -53,6 +53,10 @@ use crate::{board::GameResult, env::Connect4Env};
                 c_puct,
                 root_idx: 0,
             }
+        }
+
+        pub fn network_timing(&self) -> NetworkTiming {
+            self.policy.timing()
         }
 
         pub fn add_root_noise<R: Rng + ?Sized>(&mut self, gamma: &Gamma<f64>, epsilon: f32, rng: &mut R) {

@@ -1,0 +1,2 @@
+[env]
+SDKROOT = { value = "/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk", force = true }

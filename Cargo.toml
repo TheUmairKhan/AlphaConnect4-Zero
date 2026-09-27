@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-burn = { version = "0.21.0", features = ["autodiff", "ndarray"] }
+burn = { version = "0.21.0", features = ["autodiff", "metal"] }
 rand = "0.10.3"
 rand_distr = "0.6.0"
 serde = { version = "1.0", features = ["derive"] }
