@@ -10,10 +10,6 @@ impl Connect4Env {
         Self { board: Board::new() }
     }
 
-    pub fn reset(&mut self) {
-        self.board = Board::new()
-    }
-
     pub fn state(&self) -> &Board {
         &self.board
     }
