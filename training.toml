@@ -1,0 +1,9 @@
+# Self-play search and exploration settings.
+[self_play]
+simulations = 1000
+c_puct = 1.0
+dirichlet_alpha = 0.3
+dirichlet_epsilon = 0.25
+temperature_start = 1.0
+temperature_end = 0.1
+temperature_decay_moves = 10

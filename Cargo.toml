@@ -5,6 +5,10 @@ edition = "2024"
 
 [dependencies]
 burn = "0.21.0"
+rand = "0.10.3"
+rand_distr = "0.6.0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "1.1.6"
 
 [dev-dependencies]
 burn = { version = "0.21.0", features = ["ndarray"] }

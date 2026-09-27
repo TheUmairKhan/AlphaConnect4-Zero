@@ -1,6 +1,8 @@
     use std::{matches, unreachable};
 
 use burn::prelude::Backend;
+use rand::{Rng, RngExt};
+use rand_distr::{Distribution, Gamma};
 
 use crate::{board::GameResult, env::Connect4Env};
     use super::policy::ZeroNetPolicy;
@@ -53,16 +55,43 @@ use crate::{board::GameResult, env::Connect4Env};
             }
         }
 
-        pub fn select_action(&mut self) -> usize {
-            let (action, child_idx) = self.nodes[self.root_idx].children
-                .iter()
-                .enumerate()
-                .filter_map(|(action, child)| child.map(|idx| (action, idx)))
-                .max_by_key(|&(_, idx)| self.nodes[idx].visits)
-                .expect("no valid actions");
+        pub fn add_root_noise<R: Rng + ?Sized>(&mut self, gamma: &Gamma<f64>, epsilon: f32, rng: &mut R) {
+            let legal_moves = self.nodes[self.root_idx].state.state().valid_moves();
+            let mut noise = [0.0_f64; 7];
+            let mut total = 0.0;
+
+            for &action in &legal_moves {
+                let sample = gamma.sample(rng);
+                noise[action as usize] = sample;
+                total += sample;
+            }
+
+            for action in legal_moves {
+                let prior = &mut self.nodes[self.root_idx].priors[action as usize];
+                *prior = (1.0 - epsilon) * *prior + epsilon * (noise[action as usize] / total) as f32;
+            }
+        }
+
+        pub fn select_action<R: Rng + ?Sized>(&mut self, temperature: f32, rng: &mut R) -> (usize, [f32; 7]) {
+            let policy = self.target_policy(temperature);
+            let draw = rng.random::<f32>();
+            let mut cumulative = 0.0;
+            let mut action = 0;
+
+            for (column, &probability) in policy.iter().enumerate() {
+                if probability > 0.0 {
+                    action = column;
+                    cumulative += probability;
+                    if draw < cumulative {
+                        break;
+                    }
+                }
+            }
+
+            let child_idx = self.nodes[self.root_idx].children[action].expect("run search before selecting an action");
             self.nodes[child_idx].parent = None;
             self.root_idx = child_idx;
-            action
+            (action, policy)
         }
 
         pub fn search(&mut self) {
@@ -185,24 +214,29 @@ use crate::{board::GameResult, env::Connect4Env};
         }
 
         // probability distribution of real action visits for a given state
-        pub fn target_policy(&self) -> [f32; 7] {
+        pub fn target_policy(&self, temperature: f32) -> [f32; 7] {
             let root = &self.nodes[self.root_idx];
             let mut pi = [0.0; 7];
-            let total_visits: u32 = root.children
+            let max_visits = root.children
                 .iter()
-                .filter_map(|child| {
-                    child.map(|idx| self.nodes[idx].visits)
-                })
-                .sum();
+                .filter_map(|child| child.map(|idx| self.nodes[idx].visits))
+                .max()
+                .unwrap_or(0);
 
-            if total_visits == 0 {
+            if max_visits == 0 {
                 return pi;
             }
 
+            let mut total = 0.0;
             for action in 0..7 {
                 if let Some(child_idx) = root.children[action] {
-                    pi[action] = self.nodes[child_idx].visits as f32 / total_visits as f32;
+                    let visits = self.nodes[child_idx].visits as f32;
+                    pi[action] = (visits / max_visits as f32).powf(1.0 / temperature);
+                    total += pi[action];
                 }
+            }
+            for probability in &mut pi {
+                *probability /= total;
             }
             pi
         }
