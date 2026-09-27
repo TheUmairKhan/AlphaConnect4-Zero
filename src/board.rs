@@ -185,3 +185,85 @@ impl Player {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Board, GameResult, Player};
+
+    fn play(moves: &[u8]) -> Board {
+        let mut board = Board::new();
+        for (index, &column) in moves.iter().enumerate() {
+            let result = board.place_piece(column);
+            if index + 1 < moves.len() {
+                assert_eq!(result, GameResult::Ongoing, "game ended before move {index}");
+            }
+        }
+        board
+    }
+
+    #[test]
+    fn encoded_state_uses_the_side_to_move_as_the_first_plane() {
+        let mut board = Board::new();
+        assert_eq!(board.encode_state(), [[[0.0; 7]; 6]; 2]);
+
+        board.place_piece(2);
+        let planes = board.encode_state();
+        assert_eq!(board.current_player(), Player::Yellow);
+        assert_eq!(planes[0][0][2], 0.0);
+        assert_eq!(planes[1][0][2], 1.0);
+
+        board.place_piece(2);
+        let planes = board.encode_state();
+        assert_eq!(board.current_player(), Player::Red);
+        assert_eq!(planes[0][0][2], 1.0);
+        assert_eq!(planes[1][1][2], 1.0);
+        assert_eq!(planes[0].iter().flatten().sum::<f32>(), 1.0);
+        assert_eq!(planes[1].iter().flatten().sum::<f32>(), 1.0);
+    }
+
+    #[test]
+    fn full_column_is_removed_from_valid_moves() {
+        let mut board = Board::new();
+        assert_eq!(board.valid_moves(), vec![0, 1, 2, 3, 4, 5, 6]);
+
+        for _ in 0..6 {
+            assert_eq!(board.place_piece(3), GameResult::Ongoing);
+        }
+
+        assert_eq!(board.valid_moves(), vec![0, 1, 2, 4, 5, 6]);
+        assert_eq!(board.encode_state()[0][4][3], 1.0);
+        assert_eq!(board.encode_state()[1][5][3], 1.0);
+    }
+
+    #[test]
+    fn detects_wins_in_all_four_directions() {
+        let wins: [&[u8]; 4] = [
+            &[3, 5, 3, 6, 3, 2, 3],
+            &[3, 3, 5, 3, 2, 6, 4],
+            &[2, 3, 5, 2, 4, 1, 3, 1, 2, 1, 1],
+            &[1, 4, 4, 4, 2, 3, 2, 3, 3, 5, 4],
+        ];
+
+        for moves in wins {
+            let board = play(moves);
+            assert_eq!(board.result(), GameResult::Win(Player::Red));
+            assert_eq!(board.current_player(), Player::Yellow);
+        }
+
+        let yellow_win = play(&[0, 1, 0, 1, 2, 1, 2, 1]);
+        assert_eq!(yellow_win.result(), GameResult::Win(Player::Yellow));
+        assert_eq!(yellow_win.current_player(), Player::Red);
+    }
+
+    #[test]
+    fn full_board_without_a_win_is_a_draw() {
+        let moves = [
+            0, 5, 4, 0, 6, 6, 2, 2, 6, 1, 6, 1, 1, 3, 5, 6, 3, 5, 0, 5, 5, 1, 1, 3,
+            1, 0, 2, 3, 4, 5, 2, 3, 3, 4, 2, 0, 6, 2, 4, 0, 4, 4,
+        ];
+        let board = play(&moves);
+
+        assert_eq!(board.result(), GameResult::Draw);
+        assert!(board.valid_moves().is_empty());
+    }
+}
