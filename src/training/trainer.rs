@@ -14,6 +14,7 @@ use crate::{
         config::TrainingConfig,
         evaluation::evaluate,
         l2::squared_l2,
+        metrics::{MetricsLogger, StepMetrics},
         replay::ReplayBuffer,
         self_play::self_play,
     },
@@ -28,6 +29,8 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
     let mut training_steps = 0;
     let checkpoint_dir = Path::new(&config.training.checkpoint_dir);
     fs::create_dir_all(checkpoint_dir)?;
+    let mut metrics_logger = MetricsLogger::new(checkpoint_dir)?;
+    println!("Live metrics: {}", checkpoint_dir.join("metrics.html").display());
     best.clone().save_file(checkpoint_dir.join("best-step-0"), &DefaultRecorder::new())?;
 
     for iteration in 1..=config.training.iterations {
@@ -53,15 +56,25 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
                 &mut rng,
             );
             let (logits, predictions) = model.forward(states);
-            let policy_loss = -(policies * log_softmax(logits, 1)).sum_dim(1).mean();
+            let log_policy = log_softmax(logits, 1);
+            let policy_loss = -(policies.clone() * log_policy.clone()).sum_dim(1).mean();
             let error = predictions - values;
-            let value_loss = (error.clone() * error).mean();
+            let value_loss = (error.clone() * error.clone()).mean();
+            let metrics = StepMetrics::from_batch(
+                training_steps + 1,
+                &policy_loss,
+                &value_loss,
+                log_policy,
+                policies,
+                error,
+            );
             let loss = policy_loss + value_loss
                 + squared_l2(&model, device) * config.training.l2_coefficient;
             last_loss = Some(loss.clone().into_scalar());
             let gradients = GradientsParams::from_grads(loss.backward(), &model);
             model = optimizer.step(config.training.learning_rate, model, gradients);
             training_steps += 1;
+            metrics_logger.record(metrics)?;
 
             if training_steps % config.evaluation.every_training_steps == 0 {
                 let candidate = model.valid();
