@@ -31,7 +31,7 @@ use crate::{board::GameResult, env::Connect4Env};
         Terminal { node_idx: usize, result: GameResult}
     }
 
-    struct MCTS<B: Backend> {
+    pub struct MCTS<B: Backend> {
         nodes: Vec<Node>,
         policy: ZeroNetPolicy<B>,
         simulations: u32,
@@ -39,7 +39,7 @@ use crate::{board::GameResult, env::Connect4Env};
     }
 
     impl<B: Backend> MCTS<B> {
-        fn new(state: Connect4Env, policy: ZeroNetPolicy<B>, simulations: u32, c_puct: f32) -> Self {
+        pub fn new(state: Connect4Env, policy: ZeroNetPolicy<B>, simulations: u32, c_puct: f32) -> Self {
             let mut root = Node::new(state);
             let (priors, _value) = policy.evaluate(root.state.state());
             root.priors = priors;
@@ -52,7 +52,7 @@ use crate::{board::GameResult, env::Connect4Env};
             }
         }
 
-        fn search(&mut self) {
+        pub fn search(&mut self) {
             for _ in 0..self.simulations {
                 match self.select() {
                     SelectionResult::Expand { leaf_idx, action } => {
@@ -171,7 +171,7 @@ use crate::{board::GameResult, env::Connect4Env};
             best_action
         }
 
-        fn best_action(&self) -> usize {
+        pub fn best_action(&self) -> usize {
             let root = &self.nodes[0];
             root.children
                 .iter()
@@ -185,7 +185,7 @@ use crate::{board::GameResult, env::Connect4Env};
         }
 
         // probability distribution of real action visits for a given state
-        fn target_policy(&self) -> [f32; 7] {
+        pub fn target_policy(&self) -> [f32; 7] {
             let root = &self.nodes[0];
             let mut pi = [0.0; 7];
             let total_visits: u32 = root.children
