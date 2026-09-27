@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 burn = "0.21.0"
+
+[dev-dependencies]
+burn = { version = "0.21.0", features = ["ndarray"] }
