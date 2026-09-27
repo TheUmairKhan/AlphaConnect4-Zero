@@ -156,6 +156,24 @@ impl Board {
     pub fn current_player(&self) -> Player {
         self.current_player
     }
+
+    pub fn encode_state(&self) -> [[[f32; 7]; 6]; 2] {
+        let (current, opponent) = match self.current_player {
+            Player::Red => (self.red.0, self.yellow.0),
+            Player::Yellow => (self.yellow.0, self.red.0),
+        };
+        let mut planes = [[[0.0; 7]; 6]; 2];
+
+        for column in 0..7 {
+            for row in 0..6 {
+                let bit = 1_u64 << (column * 7 + row);
+                planes[0][row][column] = ((current & bit) != 0) as u8 as f32;
+                planes[1][row][column] = ((opponent & bit) != 0) as u8 as f32;
+            }
+        }
+
+        planes
+    }
 }
 
 

@@ -1,8 +1,9 @@
     use std::{matches, unreachable};
 
-use crate::{board::GameResult, env::Connect4Env};
-    use super::policy::StubPolicy;
+use burn::prelude::Backend;
 
+use crate::{board::GameResult, env::Connect4Env};
+    use super::policy::ZeroNetPolicy;
     struct Node {
         state: Connect4Env,
         parent: Option<usize>,
@@ -30,26 +31,26 @@ use crate::{board::GameResult, env::Connect4Env};
         Terminal { node_idx: usize, result: GameResult}
     }
 
-    struct MCTS {
+    struct MCTS<B: Backend> {
         nodes: Vec<Node>,
-        policy: StubPolicy,
+        policy: ZeroNetPolicy<B>,
         simulations: u32,
         c_puct: f32,
     }
 
-    impl MCTS {
-        fn new(state: Connect4Env, policy: StubPolicy, simulations: u32, c_puct: f32) -> Self {
-        let mut root = Node::new(state);
-        let (priors, _value) = policy.evaluate(root.state.state());
-        root.priors = Self::normalize_priors(priors, &root.state.state().valid_moves());
+    impl<B: Backend> MCTS<B> {
+        fn new(state: Connect4Env, policy: ZeroNetPolicy<B>, simulations: u32, c_puct: f32) -> Self {
+            let mut root = Node::new(state);
+            let (priors, _value) = policy.evaluate(root.state.state());
+            root.priors = priors;
 
-        Self {
-            nodes: vec![root],
-            policy,
-            simulations,
-            c_puct
+            Self {
+                nodes: vec![root],
+                policy,
+                simulations,
+                c_puct
+            }
         }
-    }
 
         fn search(&mut self) {
             for _ in 0..self.simulations {
@@ -59,8 +60,7 @@ use crate::{board::GameResult, env::Connect4Env};
                         match self.nodes[child_idx].state.state().result() {
                             GameResult::Ongoing => {
                                 let (policy, value) = self.policy.evaluate(self.nodes[child_idx].state.state());
-                                let valid_moves = self.nodes[child_idx].state.state().valid_moves();
-                                self.nodes[child_idx].priors = Self::normalize_priors(policy, &valid_moves);
+                                self.nodes[child_idx].priors = policy;
                                 self.backpropagate(child_idx, value);
                             }
                             GameResult::Win(_) => {
@@ -171,30 +171,6 @@ use crate::{board::GameResult, env::Connect4Env};
             best_action
         }
 
-        fn normalize_priors(priors: [f32; 7], valid_moves: &[u8]) -> [f32; 7] {
-            let mut masked_priors = [0.0; 7];
-            let mut total = 0.0;
-
-            for &action in valid_moves {
-                let prior = priors[action as usize];
-                masked_priors[action as usize] = prior;
-                total += prior;
-            }
-
-            if total > 0.0 {
-                for prior in &mut masked_priors {
-                    *prior /= total;
-                }
-            } else {
-                let uniform_prior = 1.0 / valid_moves.len() as f32;
-                for &action in valid_moves {
-                    masked_priors[action as usize] = uniform_prior;
-                }
-            }
-
-            masked_priors
-        }
-
         fn best_action(&self) -> usize {
             let root = &self.nodes[0];
             root.children
@@ -208,7 +184,8 @@ use crate::{board::GameResult, env::Connect4Env};
                 .expect("no valid actions")
         }
 
-        fn root_policy(&self) -> [f32; 7] {
+        // probability distribution of real action visits for a given state
+        fn target_policy(&self) -> [f32; 7] {
             let root = &self.nodes[0];
             let mut pi = [0.0; 7];
             let total_visits: u32 = root.children
