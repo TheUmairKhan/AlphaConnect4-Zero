@@ -88,10 +88,24 @@ use crate::{board::GameResult, env::Connect4Env};
                 }
             }
 
-            let child_idx = self.nodes[self.root_idx].children[action].expect("run search before selecting an action");
+            self.advance_root(action);
+            (action, policy)
+        }
+
+        pub fn advance_root(&mut self, action: usize) {
+            let child_idx = match self.nodes[self.root_idx].children[action] {
+                Some(idx) => idx,
+                None => {
+                    let idx = self.expand(self.root_idx, action as u8);
+                    if matches!(self.nodes[idx].state.state().result(), GameResult::Ongoing) {
+                        let (priors, _) = self.policy.evaluate(self.nodes[idx].state.state());
+                        self.nodes[idx].priors = priors;
+                    }
+                    idx
+                }
+            };
             self.nodes[child_idx].parent = None;
             self.root_idx = child_idx;
-            (action, policy)
         }
 
         pub fn search(&mut self) {

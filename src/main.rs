@@ -3,6 +3,12 @@ mod env;
 mod mcts;
 pub mod model;
 mod training;
-fn main() {
-    println!("Hello, world!");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    type Backend = burn::backend::Autodiff<burn::backend::NdArray<f32>>;
+
+    let path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "training.toml".to_string());
+    let config = training::config::TrainingConfig::load(path)?;
+    training::trainer::run::<Backend>(&config, &Default::default())
 }

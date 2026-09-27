@@ -1,9 +1,35 @@
 # Self-play search and exploration settings.
 [self_play]
 simulations = 1000
-c_puct = 1.0
 dirichlet_alpha = 0.3
 dirichlet_epsilon = 0.25
 temperature_start = 1.0
 temperature_end = 0.1
 temperature_decay_moves = 10
+
+[search]
+c_puct = 1.0
+
+[model]
+hidden_size = 64
+num_res_blocks = 11
+
+[training]
+# Each iteration generates these games with the current best, then trains the candidate.
+iterations = 200
+games_per_iteration = 10
+batch_size = 64
+# Keep complete recent games; batches sample uniformly from all their positions.
+replay_capacity_games = 500
+updates_per_iteration = 10
+learning_rate = 0.001
+l2_coefficient = 0.0001
+checkpoint_every_iterations = 10
+checkpoint_dir = "checkpoints"
+
+[evaluation]
+# Play candidate versus best after this many optimizer updates, alternating colors.
+every_training_steps = 1000
+games = 400
+simulations = 1000
+promotion_win_rate = 0.55
