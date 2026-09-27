@@ -36,6 +36,7 @@ use crate::{board::GameResult, env::Connect4Env};
         policy: ZeroNetPolicy<B>,
         simulations: u32,
         c_puct: f32,
+        root_idx: usize
     }
 
     impl<B: Backend> MCTS<B> {
@@ -43,13 +44,25 @@ use crate::{board::GameResult, env::Connect4Env};
             let mut root = Node::new(state);
             let (priors, _value) = policy.evaluate(root.state.state());
             root.priors = priors;
-
             Self {
                 nodes: vec![root],
                 policy,
                 simulations,
-                c_puct
+                c_puct,
+                root_idx: 0,
             }
+        }
+
+        pub fn select_action(&mut self) -> usize {
+            let (action, child_idx) = self.nodes[self.root_idx].children
+                .iter()
+                .enumerate()
+                .filter_map(|(action, child)| child.map(|idx| (action, idx)))
+                .max_by_key(|&(_, idx)| self.nodes[idx].visits)
+                .expect("no valid actions");
+            self.nodes[child_idx].parent = None;
+            self.root_idx = child_idx;
+            action
         }
 
         pub fn search(&mut self) {
@@ -84,7 +97,7 @@ use crate::{board::GameResult, env::Connect4Env};
         }
 
         fn select(&self) -> SelectionResult {
-            let mut node_idx = 0;
+            let mut node_idx = self.root_idx;
 
             loop {
                 let result = self.nodes[node_idx].state.state().result();
@@ -171,22 +184,9 @@ use crate::{board::GameResult, env::Connect4Env};
             best_action
         }
 
-        pub fn best_action(&self) -> usize {
-            let root = &self.nodes[0];
-            root.children
-                .iter()
-                .enumerate()
-                .filter_map(|(action, child)| {
-                    child.map(|idx| (action, self.nodes[idx].visits))
-                })
-                .max_by_key(|&(_, visits)| visits)
-                .map(|(action, _)| action)
-                .expect("no valid actions")
-        }
-
         // probability distribution of real action visits for a given state
         pub fn target_policy(&self) -> [f32; 7] {
-            let root = &self.nodes[0];
+            let root = &self.nodes[self.root_idx];
             let mut pi = [0.0; 7];
             let total_visits: u32 = root.children
                 .iter()
