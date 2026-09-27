@@ -19,12 +19,13 @@ impl<B: Backend> ZeroNetPolicy<B> {
         let valid_moves = state.valid_moves();
         let max_logit = valid_moves
             .iter()
-            .map(|&action| logits[action])
+            .map(|&action| logits[action as usize])
             .fold(f32::NEG_INFINITY, f32::max);
         let mut priors = [0.0; 7];
         let mut total = 0.0;
 
         for action in valid_moves {
+            let action = action as usize;
             let prior = (logits[action] - max_logit).exp();
             priors[action] = prior;
             total += prior;
