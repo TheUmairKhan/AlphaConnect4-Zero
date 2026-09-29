@@ -1,11 +1,11 @@
-    use std::{matches, unreachable};
+use std::{matches, unreachable};
 
-use burn::prelude::Backend;
 use rand::{Rng, RngExt};
 use rand_distr::{Distribution, Gamma};
 
 use crate::{board::GameResult, env::Connect4Env};
-    use super::policy::{NetworkTiming, ZeroNetPolicy};
+
+use super::{evaluation::LeafEvaluator, policy::NetworkTiming};
     struct Node {
         state: Connect4Env,
         parent: Option<usize>,
@@ -33,22 +33,21 @@ use crate::{board::GameResult, env::Connect4Env};
         Terminal { node_idx: usize, result: GameResult}
     }
 
-    pub struct MCTS<B: Backend> {
+    pub struct MCTS<E: LeafEvaluator> {
         nodes: Vec<Node>,
-        policy: ZeroNetPolicy<B>,
+        evaluator: E,
         simulations: u32,
         c_puct: f32,
         root_idx: usize
     }
 
-    impl<B: Backend> MCTS<B> {
-        pub fn new(state: Connect4Env, policy: ZeroNetPolicy<B>, simulations: u32, c_puct: f32) -> Self {
+    impl<E: LeafEvaluator> MCTS<E> {
+        pub fn new(state: Connect4Env, evaluator: E, simulations: u32, c_puct: f32) -> Self {
             let mut root = Node::new(state);
-            let (priors, _value) = policy.evaluate(root.state.state());
-            root.priors = priors;
+            root.priors = evaluator.evaluate(*root.state.state()).priors;
             Self {
                 nodes: vec![root],
-                policy,
+                evaluator,
                 simulations,
                 c_puct,
                 root_idx: 0,
@@ -56,7 +55,7 @@ use crate::{board::GameResult, env::Connect4Env};
         }
 
         pub fn network_timing(&self) -> NetworkTiming {
-            self.policy.timing()
+            self.evaluator.timing()
         }
 
         pub fn add_root_noise<R: Rng + ?Sized>(&mut self, gamma: &Gamma<f64>, epsilon: f32, rng: &mut R) {
@@ -102,8 +101,7 @@ use crate::{board::GameResult, env::Connect4Env};
                 None => {
                     let idx = self.expand(self.root_idx, action as u8);
                     if matches!(self.nodes[idx].state.state().result(), GameResult::Ongoing) {
-                        let (priors, _) = self.policy.evaluate(self.nodes[idx].state.state());
-                        self.nodes[idx].priors = priors;
+                        self.nodes[idx].priors = self.evaluator.evaluate(*self.nodes[idx].state.state()).priors;
                     }
                     idx
                 }
@@ -119,9 +117,9 @@ use crate::{board::GameResult, env::Connect4Env};
                         let child_idx = self.expand(leaf_idx, action as u8);
                         match self.nodes[child_idx].state.state().result() {
                             GameResult::Ongoing => {
-                                let (policy, value) = self.policy.evaluate(self.nodes[child_idx].state.state());
-                                self.nodes[child_idx].priors = policy;
-                                self.backpropagate(child_idx, value);
+                                let result = self.evaluator.evaluate(*self.nodes[child_idx].state.state());
+                                self.nodes[child_idx].priors = result.priors;
+                                self.backpropagate(child_idx, result.value);
                             }
                             GameResult::Win(_) => {
                                 self.backpropagate(child_idx, -1.0);
@@ -259,3 +257,36 @@ use crate::{board::GameResult, env::Connect4Env};
             pi
         }
     }
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, rc::Rc};
+
+    use crate::{board::Board, env::Connect4Env};
+
+    use super::{super::{evaluation::{EvalOutput, LeafEvaluator}, policy::NetworkTiming}, MCTS};
+
+    struct CountingEvaluator(Rc<Cell<usize>>);
+
+    impl LeafEvaluator for CountingEvaluator {
+        fn evaluate(&self, _board: Board) -> EvalOutput {
+            self.0.set(self.0.get() + 1);
+            EvalOutput { priors: [1.0 / 7.0; 7], value: 0.25 }
+        }
+
+        fn timing(&self) -> NetworkTiming { NetworkTiming::default() }
+    }
+
+    #[test]
+    fn root_leaf_and_unexpanded_next_root_use_the_evaluator() {
+        let calls = Rc::new(Cell::new(0));
+        let mut search = MCTS::new(Connect4Env::new(), CountingEvaluator(calls.clone()), 1, 1.0);
+        assert_eq!(calls.get(), 1);
+
+        search.search();
+        assert_eq!(calls.get(), 2);
+
+        search.advance_root(1);
+        assert_eq!(calls.get(), 3);
+    }
+}

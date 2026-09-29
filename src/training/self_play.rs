@@ -1,12 +1,11 @@
 use std::time::{Duration, Instant};
 
-use burn::prelude::Backend;
 use rand_distr::{Gamma, GammaError};
 
 use crate::{
     board::{GameResult, Player},
     env::Connect4Env,
-    mcts::{mcts::MCTS, policy::{NetworkTiming, ZeroNetPolicy}},
+    mcts::{evaluation::LeafEvaluator, mcts::MCTS, policy::NetworkTiming},
     training::config::TrainingConfig,
 };
 
@@ -40,8 +39,8 @@ struct PendingExample {
     player: Player,
 }
 
-pub fn self_play<B: Backend>(
-    policy: ZeroNetPolicy<B>,
+pub fn self_play<E: LeafEvaluator>(
+    evaluator: E,
     config: &TrainingConfig,
 ) -> Result<SelfPlayGame, GammaError> {
     let game_started = Instant::now();
@@ -49,7 +48,7 @@ pub fn self_play<B: Backend>(
     let gamma = Gamma::new(self_play.dirichlet_alpha as f64, 1.0)?;
     let mut rng = rand::rng();
     let mut env = Connect4Env::new();
-    let mut mcts = MCTS::new(env, policy, self_play.simulations, config.search.c_puct);
+    let mut mcts = MCTS::new(env, evaluator, self_play.simulations, config.search.c_puct);
     let mut positions = Vec::new();
     let mut move_timings = Vec::new();
 
