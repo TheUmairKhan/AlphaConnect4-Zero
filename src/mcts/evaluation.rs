@@ -26,19 +26,14 @@ pub struct LeafRequest {
     pub sender: SyncSender<EvalOutput>,
 }
 
-pub enum EvalMessage {
-    Request(LeafRequest),
-    WorkerFinished,
-}
-
 #[derive(Clone)]
 pub struct EvalClient {
-    requests: SyncSender<EvalMessage>,
+    requests: SyncSender<LeafRequest>,
     timing: Cell<NetworkTiming>,
 }
 
 impl EvalClient {
-    pub fn new(requests: SyncSender<EvalMessage>) -> Self {
+    pub fn new(requests: SyncSender<LeafRequest>) -> Self {
         Self {
             requests,
             timing: Cell::new(NetworkTiming::default()),
@@ -51,7 +46,7 @@ impl LeafEvaluator for EvalClient {
         let started = Instant::now();
         let (sender, receiver) = mpsc::sync_channel(1);
         self.requests
-            .send(EvalMessage::Request(LeafRequest { board, sender }))
+            .send(LeafRequest { board, sender })
             .expect("evaluation request queue closed");
         let output = receiver.recv().expect("evaluation reply channel closed");
 

@@ -1,4 +1,12 @@
-use std::{error::Error, fs, path::Path, time::{Duration, Instant}};
+use std::{
+    error::Error,
+    fs,
+    path::Path,
+    process,
+    sync::{Condvar, Mutex, atomic::{AtomicUsize, Ordering}},
+    thread,
+    time::Instant,
+};
 
 use burn::{
     module::AutodiffModule,
@@ -7,165 +15,155 @@ use burn::{
     record::DefaultRecorder,
     tensor::{activation::log_softmax, backend::AutodiffBackend},
 };
+
 use crate::{
     mcts::policy::ZeroNetPolicy,
     model::zeronet::{ZeroNet, ZeroNetConfig},
     training::{
         accelerator,
         config::TrainingConfig,
-        evaluation::evaluate,
         generator::generate_self_play_games,
         l2::squared_l2,
         metrics::{MetricsLogger, StepMetrics},
         performance::{TimingLogger, UpdateTiming},
-        replay::ReplayBuffer,
+        replay::{ReplayBuffer, batch_tensors},
     },
 };
 
 pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> Result<(), Box<dyn Error>> {
+    let started = Instant::now();
     let mut model = ZeroNetConfig::new(2, config.model.hidden_size, config.model.num_res_blocks).init::<B>(device);
-    let mut best = model.valid();
+    let initial_model = model.valid();
     let mut optimizer = AdamConfig::new().init::<B, ZeroNet<B>>();
-    let mut replay = ReplayBuffer::new(config.training.replay_capacity_games);
+    let replay = (Mutex::new(ReplayBuffer::new(config.training.replay_capacity_games)), Condvar::new());
+    let pending_model = Mutex::new(None::<(usize, ZeroNet<B::InnerBackend>)>);
+    let games_completed = AtomicUsize::new(0);
+    let positions_generated = AtomicUsize::new(0);
     let mut rng = rand::rng();
-    let mut training_steps = 0;
     let checkpoint_dir = Path::new(&config.training.checkpoint_dir);
     fs::create_dir_all(checkpoint_dir)?;
     let mut metrics_logger = MetricsLogger::new(checkpoint_dir)?;
-    let mut timing_logger = TimingLogger::new(checkpoint_dir)?;
+    let timing_logger = Mutex::new(TimingLogger::new(checkpoint_dir)?);
     println!("Live metrics: {}", checkpoint_dir.join("metrics.html").display());
     println!("Performance: {}", checkpoint_dir.join("performance.html").display());
-    best.clone().save_file(checkpoint_dir.join("best-step-0"), &DefaultRecorder::new())?;
 
-    for iteration in 1..=config.training.iterations {
-        let iteration_started = Instant::now();
-        let self_play_started = Instant::now();
-        let mut positions = 0;
-        let policy = ZeroNetPolicy::new(best.clone(), device.clone());
-        let batch_summary = generate_self_play_games(
-            config,
-            |request_receiver, worker_count| accelerator::serve_requests(
-                request_receiver,
-                worker_count,
-                config.self_play.evaluation_batch_size,
-                |boards| policy.evaluate(boards),
-            ),
-            |game_number, game| {
-                positions += game.examples.len();
-                timing_logger.game(iteration, game_number, &game.timing, config.self_play.simulations)
-                    .expect("failed to log self-play game");
-                replay.push(game.examples);
-            },
-        );
-        let self_play_elapsed = self_play_started.elapsed();
-        timing_logger.accelerator(iteration, &batch_summary, policy.timing())?;
-        println!("self-play evaluation: {} requests in {} batches (largest batch {})",
-            batch_summary.requests, batch_summary.batches, batch_summary.largest_batch);
-
-        if replay.positions() < config.training.batch_size {
-            return Err("not enough self-play positions for one training batch".into());
-        }
-
-        let mut last_loss = None;
-        let mut updates_elapsed = Duration::ZERO;
-        let mut evaluation_elapsed = Duration::ZERO;
-        for _ in 0..config.training.updates_per_iteration {
-            let update_started = Instant::now();
-            let (states, policies, values) = replay.sample_batch::<B>(
-                config.training.batch_size,
-                device,
-                &mut rng,
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut policy = ZeroNetPolicy::new(initial_model, device.clone());
+            let mut model_step = 0;
+            generate_self_play_games(
+                config,
+                |request_receiver| accelerator::serve_requests(
+                    request_receiver,
+                    config.self_play.evaluation_batch_size,
+                    |boards| {
+                        if let Some((step, latest)) = pending_model.lock().unwrap().take() {
+                            policy = ZeroNetPolicy::new(latest, device.clone());
+                            model_step = step;
+                            println!("evaluator switched to model from update {step}");
+                        }
+                        let before = policy.timing();
+                        let outputs = policy.evaluate(boards);
+                        let batch_timing = policy.timing().since(before);
+                        if let Err(error) = timing_logger.lock().unwrap()
+                            .accelerator_batch(model_step, boards.len(), batch_timing)
+                        {
+                            eprintln!("failed to log accelerator batch: {error}");
+                            process::exit(1);
+                        }
+                        outputs
+                    },
+                ),
+                |game_number, game| {
+                    let positions = game.examples.len();
+                    timing_logger.lock().unwrap()
+                        .game(game_number, &game.timing, config.self_play.simulations)
+                        .expect("failed to log self-play game");
+                    let (buffer, ready) = &replay;
+                    buffer.lock().unwrap().push(game.examples);
+                    positions_generated.fetch_add(positions, Ordering::Relaxed);
+                    games_completed.fetch_add(1, Ordering::Relaxed);
+                    ready.notify_one();
+                },
             );
-            let sample_elapsed = update_started.elapsed();
-            let forward_started = Instant::now();
-            let (logits, predictions) = model.forward(states);
-            let forward_elapsed = forward_started.elapsed();
-            let loss_started = Instant::now();
-            let log_policy = log_softmax(logits, 1);
-            let policy_loss = -(policies.clone() * log_policy.clone()).sum_dim(1).mean();
-            let error = predictions - values;
-            let value_loss = (error.clone() * error.clone()).mean();
-            let metrics = StepMetrics::from_batch(
-                training_steps + 1,
-                &policy_loss,
-                &value_loss,
-                log_policy,
-                policies,
-                error,
-            );
-            let loss = policy_loss + value_loss
-                + squared_l2(&model, device) * config.training.l2_coefficient;
-            last_loss = Some(loss.clone().into_scalar());
-            let loss_elapsed = loss_started.elapsed();
-            let backward_started = Instant::now();
-            let gradients = GradientsParams::from_grads(loss.backward(), &model);
-            let backward_elapsed = backward_started.elapsed();
-            let optimizer_started = Instant::now();
-            model = optimizer.step(config.training.learning_rate, model, gradients);
-            let optimizer_elapsed = optimizer_started.elapsed();
-            training_steps += 1;
-            let logging_started = Instant::now();
-            metrics_logger.record(metrics)?;
-            let logging_elapsed = logging_started.elapsed();
-            let update_total = update_started.elapsed();
-            updates_elapsed += update_total;
-            timing_logger.update(training_steps, UpdateTiming {
-                total: update_total,
-                sample: sample_elapsed,
-                forward: forward_elapsed,
-                loss_metrics: loss_elapsed,
-                backward: backward_elapsed,
-                optimizer: optimizer_elapsed,
-                logging: logging_elapsed,
-            })?;
+        });
 
-            if training_steps % config.evaluation.every_training_steps == 0 {
-                let candidate = model.valid();
-                candidate.clone().save_file(
-                    checkpoint_dir.join(format!("candidate-step-{training_steps}")),
-                    &DefaultRecorder::new(),
-                )?;
-                let evaluation_started = Instant::now();
-                let score = evaluate(
-                    &candidate,
-                    &best,
-                    config,
-                    device,
+        let training_result = (|| -> Result<(), Box<dyn Error>> {
+            for step in 1..=config.training.total_updates {
+                let update_started = Instant::now();
+                let examples = {
+                    let (buffer, ready) = &replay;
+                    let mut buffer = buffer.lock().unwrap();
+                    while buffer.positions() < config.training.batch_size {
+                        buffer = ready.wait(buffer).unwrap();
+                    }
+                    buffer.sample_examples(config.training.batch_size, &mut rng)
+                };
+                let (states, policies, values) = batch_tensors::<B>(&examples, device);
+                let sample_elapsed = update_started.elapsed();
+                let forward_started = Instant::now();
+                let (logits, predictions) = model.forward(states);
+                let forward_elapsed = forward_started.elapsed();
+                let loss_started = Instant::now();
+                let log_policy = log_softmax(logits, 1);
+                let policy_loss = -(policies.clone() * log_policy.clone()).sum_dim(1).mean();
+                let error = predictions - values;
+                let value_loss = (error.clone() * error.clone()).mean();
+                let metrics = StepMetrics::from_batch(
+                    step, &policy_loss, &value_loss, log_policy, policies, error,
                 );
-                let elapsed = evaluation_started.elapsed();
-                let win_rate = score.candidate_wins as f32 / config.evaluation.games as f32;
-                println!(
-                    "evaluation at step {training_steps}: candidate {} wins, best {} wins, {} draws ({:.1}% candidate win rate)",
-                    score.candidate_wins,
-                    score.best_wins,
-                    score.draws,
-                    win_rate * 100.0,
-                );
-                if win_rate > config.evaluation.promotion_win_rate {
-                    best = candidate;
-                    best.clone().save_file(
-                        checkpoint_dir.join(format!("best-step-{training_steps}")),
+                let loss = policy_loss + value_loss
+                    + squared_l2(&model, device) * config.training.l2_coefficient;
+                let loss_elapsed = loss_started.elapsed();
+                let backward_started = Instant::now();
+                let gradients = GradientsParams::from_grads(loss.backward(), &model);
+                let backward_elapsed = backward_started.elapsed();
+                let optimizer_started = Instant::now();
+                model = optimizer.step(config.training.learning_rate, model, gradients);
+                let optimizer_elapsed = optimizer_started.elapsed();
+                let logging_started = Instant::now();
+                metrics_logger.record(metrics)?;
+                let logging_elapsed = logging_started.elapsed();
+                timing_logger.lock().unwrap().update(step, UpdateTiming {
+                    total: update_started.elapsed(),
+                    sample: sample_elapsed,
+                    forward: forward_elapsed,
+                    loss_metrics: loss_elapsed,
+                    backward: backward_elapsed,
+                    optimizer: optimizer_elapsed,
+                    logging: logging_elapsed,
+                })?;
+
+                if step % config.self_play.model_refresh_per_updates == 0 {
+                    *pending_model.lock().unwrap() = Some((step, model.valid()));
+                    println!("published evaluator model at update {step}");
+                }
+                if step % config.training.checkpoint_every_updates == 0
+                    || step == config.training.total_updates
+                {
+                    model.valid().save_file(
+                        checkpoint_dir.join(format!("model-step-{step}")),
                         &DefaultRecorder::new(),
                     )?;
-                    println!("promoted candidate at step {training_steps}");
                 }
-                evaluation_elapsed += elapsed;
-                timing_logger.evaluation(training_steps, config.evaluation.games, elapsed)?;
             }
+            Ok(())
+        })();
+
+        if let Err(error) = training_result {
+            eprintln!("training failed: {error}");
+            process::exit(1);
         }
-
-        println!("iteration {iteration}/{}: {} games, {positions} positions, replay {} games/{} positions, step {training_steps}, loss {last_loss:?}",
-            config.training.iterations, config.training.games_per_iteration, replay.games(), replay.positions());
-
-        if iteration % config.training.checkpoint_every_iterations == 0
-            || iteration == config.training.iterations
-        {
-            let path = checkpoint_dir.join(format!("model-iteration-{iteration}"));
-            model.valid().save_file(path, &DefaultRecorder::new())?;
+        let games = games_completed.load(Ordering::Relaxed);
+        let positions = positions_generated.load(Ordering::Relaxed);
+        let replay_games = replay.0.lock().unwrap().games();
+        let mut timing = timing_logger.lock().unwrap();
+        if let Err(error) = timing.finish(config.training.total_updates, games, positions, started.elapsed()) {
+            eprintln!("failed to write run timing: {error}");
+            process::exit(1);
         }
-        timing_logger.iteration(iteration, config.training.games_per_iteration, positions,
-            iteration_started.elapsed(), self_play_elapsed, updates_elapsed, evaluation_elapsed)?;
-    }
-
-    Ok(())
+        println!("finished {} updates; self-play generated {games} games and {positions} positions ({replay_games} retained)",
+            config.training.total_updates);
+        process::exit(0)
+    })
 }

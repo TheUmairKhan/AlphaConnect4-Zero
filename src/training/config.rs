@@ -8,7 +8,6 @@ pub struct TrainingConfig {
     pub self_play: SelfPlayConfig,
     pub model: ModelConfig,
     pub training: TrainerConfig,
-    pub evaluation: EvaluationConfig,
 }
 
 #[derive(Deserialize)]
@@ -24,29 +23,20 @@ pub struct ModelConfig {
 
 #[derive(Deserialize)]
 pub struct TrainerConfig {
-    pub iterations: usize,
-    pub games_per_iteration: usize,
+    pub total_updates: usize,
     pub batch_size: usize,
     pub replay_capacity_games: usize,
-    pub updates_per_iteration: usize,
     pub learning_rate: f64,
     pub l2_coefficient: f64,
-    pub checkpoint_every_iterations: usize,
+    pub checkpoint_every_updates: usize,
     pub checkpoint_dir: String,
-}
-
-#[derive(Deserialize)]
-pub struct EvaluationConfig {
-    pub every_training_steps: usize,
-    pub games: usize,
-    pub simulations: u32,
-    pub promotion_win_rate: f32,
 }
 
 #[derive(Deserialize)]
 pub struct SelfPlayConfig {
     pub parallel_games: usize,
     pub evaluation_batch_size: usize,
+    pub model_refresh_per_updates: usize,
     pub simulations: u32,
     pub dirichlet_alpha: f32,
     pub dirichlet_epsilon: f32,
@@ -71,12 +61,10 @@ impl TrainingConfig {
         if self.model.hidden_size == 0 || self.model.num_res_blocks == 0 {
             return Err("model dimensions must be positive".into());
         }
-        if train.iterations == 0
-            || train.games_per_iteration == 0
+        if train.total_updates == 0
             || train.batch_size == 0
             || train.replay_capacity_games == 0
-            || train.updates_per_iteration == 0
-            || train.checkpoint_every_iterations == 0
+            || train.checkpoint_every_updates == 0
             || train.checkpoint_dir.is_empty()
             || !train.learning_rate.is_finite()
             || train.learning_rate <= 0.0
@@ -87,16 +75,6 @@ impl TrainingConfig {
         }
         if train.replay_capacity_games.saturating_mul(7) < train.batch_size {
             return Err("replay_capacity_games is too small to hold one batch".into());
-        }
-        let evaluation = &self.evaluation;
-        if evaluation.every_training_steps == 0
-            || evaluation.games == 0
-            || evaluation.games % 2 != 0
-            || evaluation.simulations == 0
-            || !evaluation.promotion_win_rate.is_finite()
-            || !(0.0..=1.0).contains(&evaluation.promotion_win_rate)
-        {
-            return Err("invalid evaluation settings".into());
         }
         Ok(())
     }
@@ -109,8 +87,11 @@ impl SelfPlayConfig {
     }
 
     fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.simulations == 0 || self.parallel_games == 0 || self.evaluation_batch_size == 0 {
-            return Err("simulations, parallel_games, and evaluation_batch_size must be positive".into());
+        if self.simulations == 0 || self.parallel_games == 0 || self.evaluation_batch_size == 0 || self.model_refresh_per_updates == 0 {
+            return Err("simulations, parallel_games, evaluation_batch_size, and model_refresh_per_updates must be positive".into());
+        }
+        if self.evaluation_batch_size > self.parallel_games {
+            return Err("evaluation_batch_size must not exceed parallel_games".into());
         }
         if !self.dirichlet_alpha.is_finite() || self.dirichlet_alpha <= 0.0 {
             return Err("dirichlet_alpha must be positive".into());

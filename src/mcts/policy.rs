@@ -1,6 +1,6 @@
 use std::{cell::Cell, time::{Duration, Instant}};
 
-use burn::prelude::*;
+use burn::{prelude::*, tensor::Transaction};
 
 use crate::{board::Board, model::zeronet::ZeroNet};
 
@@ -13,6 +13,18 @@ pub struct NetworkTiming {
     pub forward: Duration,
     pub readback: Duration,
     pub total: Duration,
+}
+
+impl NetworkTiming {
+    pub fn since(self, earlier: Self) -> Self {
+        Self {
+            calls: self.calls - earlier.calls,
+            input: self.input - earlier.input,
+            forward: self.forward - earlier.forward,
+            readback: self.readback - earlier.readback,
+            total: self.total - earlier.total,
+        }
+    }
 }
 
 pub struct ZeroNetPolicy<B: Backend> {
@@ -43,8 +55,9 @@ impl<B: Backend> ZeroNetPolicy<B> {
         let input_done = Instant::now();
         let (policy_logits, value) = self.model.forward(input);
         let forward_done = Instant::now();
-        let logits: Vec<f32> = policy_logits.into_data().iter::<f32>().collect();
-        let values: Vec<f32> = value.into_data().iter::<f32>().collect();
+        let data = Transaction::default().register(policy_logits).register(value).execute();
+        let logits: Vec<f32> = data[0].iter::<f32>().collect();
+        let values: Vec<f32> = data[1].iter::<f32>().collect();
         let readback_done = Instant::now();
 
         let outputs = boards.iter().enumerate().map(|(index, board)| {

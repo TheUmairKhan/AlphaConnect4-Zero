@@ -37,33 +37,40 @@ impl ReplayBuffer {
         self.positions
     }
 
-    pub fn sample_batch<B: Backend>(
+    pub fn sample_examples(
         &self,
         batch_size: usize,
-        device: &B::Device,
         rng: &mut impl Rng,
-    ) -> (Tensor<B, 4>, Tensor<B, 2>, Tensor<B, 2>) {
-        let mut states = Vec::with_capacity(batch_size * 2 * 6 * 7);
-        let mut policies = Vec::with_capacity(batch_size * 7);
-        let mut values = Vec::with_capacity(batch_size);
+    ) -> Vec<TrainingExample> {
         let game_ends: Vec<usize> = self.games.iter().scan(0, |end, game| {
             *end += game.len();
             Some(*end)
         }).collect();
 
-        for index in index::sample(rng, self.positions, batch_size).iter() {
+        index::sample(rng, self.positions, batch_size).iter().map(|index| {
             let game_idx = game_ends.partition_point(|&end| end <= index);
             let game_start = if game_idx == 0 { 0 } else { game_ends[game_idx - 1] };
-            let example = &self.games[game_idx][index - game_start];
-            states.extend(example.state.iter().flatten().flatten().copied());
-            policies.extend_from_slice(&example.policy);
-            values.push(example.value);
-        }
-
-        (
-            Tensor::from_data(TensorData::new(states, [batch_size, 2, 6, 7]), device),
-            Tensor::from_data(TensorData::new(policies, [batch_size, 7]), device),
-            Tensor::from_data(TensorData::new(values, [batch_size, 1]), device),
-        )
+            self.games[game_idx][index - game_start].clone()
+        }).collect()
     }
+}
+
+pub fn batch_tensors<B: Backend>(examples: &[TrainingExample], device: &B::Device)
+    -> (Tensor<B, 4>, Tensor<B, 2>, Tensor<B, 2>)
+{
+    let batch_size = examples.len();
+    let mut states = Vec::with_capacity(batch_size * 2 * 6 * 7);
+    let mut policies = Vec::with_capacity(batch_size * 7);
+    let mut values = Vec::with_capacity(batch_size);
+    for example in examples {
+        states.extend(example.state.iter().flatten().flatten().copied());
+        policies.extend_from_slice(&example.policy);
+        values.push(example.value);
+    }
+
+    (
+        Tensor::from_data(TensorData::new(states, [batch_size, 2, 6, 7]), device),
+        Tensor::from_data(TensorData::new(policies, [batch_size, 7]), device),
+        Tensor::from_data(TensorData::new(values, [batch_size, 1]), device),
+    )
 }

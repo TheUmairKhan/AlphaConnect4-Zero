@@ -9,6 +9,7 @@ use crate::{
     training::config::TrainingConfig,
 };
 
+#[derive(Clone)]
 pub struct TrainingExample {
     pub state: [[[f32; 7]; 6]; 2],
     pub policy: [f32; 7],
