@@ -26,14 +26,19 @@ pub struct LeafRequest {
     pub sender: SyncSender<EvalOutput>,
 }
 
+pub enum EvalMessage {
+    Request(LeafRequest),
+    WorkerFinished,
+}
+
 #[derive(Clone)]
 pub struct EvalClient {
-    requests: SyncSender<LeafRequest>,
+    requests: SyncSender<EvalMessage>,
     timing: Cell<NetworkTiming>,
 }
 
 impl EvalClient {
-    pub fn new(requests: SyncSender<LeafRequest>) -> Self {
+    pub fn new(requests: SyncSender<EvalMessage>) -> Self {
         Self {
             requests,
             timing: Cell::new(NetworkTiming::default()),
@@ -46,7 +51,7 @@ impl LeafEvaluator for EvalClient {
         let started = Instant::now();
         let (sender, receiver) = mpsc::sync_channel(1);
         self.requests
-            .send(LeafRequest { board, sender })
+            .send(EvalMessage::Request(LeafRequest { board, sender }))
             .expect("evaluation request queue closed");
         let output = receiver.recv().expect("evaluation reply channel closed");
 
@@ -65,8 +70,7 @@ impl LeafEvaluator for EvalClient {
 
 impl<B: Backend> LeafEvaluator for ZeroNetPolicy<B> {
     fn evaluate(&self, board: Board) -> EvalOutput {
-        let (priors, value) = ZeroNetPolicy::evaluate(self, &board);
-        EvalOutput { priors, value }
+        ZeroNetPolicy::evaluate(self, std::slice::from_ref(&board)).pop().unwrap()
     }
 
     fn timing(&self) -> NetworkTiming {

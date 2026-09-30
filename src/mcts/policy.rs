@@ -4,6 +4,8 @@ use burn::prelude::*;
 
 use crate::{board::Board, model::zeronet::ZeroNet};
 
+use super::evaluation::EvalOutput;
+
 #[derive(Clone, Copy, Default)]
 pub struct NetworkTiming {
     pub calls: usize,
@@ -28,35 +30,46 @@ impl<B: Backend> ZeroNetPolicy<B> {
         self.timing.get()
     }
 
-    pub fn evaluate(&self, state: &Board) -> ([f32; 7], f32) {
+    pub fn evaluate(&self, boards: &[Board]) -> Vec<EvalOutput> {
         let started = Instant::now();
-        let input = Tensor::<B, 4>::from_data([state.encode_state()], &self.device);
+        let mut states = Vec::with_capacity(boards.len() * 2 * 6 * 7);
+        for board in boards {
+            states.extend(board.encode_state().into_iter().flatten().flatten());
+        }
+        let input = Tensor::<B, 4>::from_data(
+            TensorData::new(states, [boards.len(), 2, 6, 7]),
+            &self.device,
+        );
         let input_done = Instant::now();
         let (policy_logits, value) = self.model.forward(input);
         let forward_done = Instant::now();
         let logits: Vec<f32> = policy_logits.into_data().iter::<f32>().collect();
-        let value_data = value.into_data();
+        let values: Vec<f32> = value.into_data().iter::<f32>().collect();
         let readback_done = Instant::now();
-        let valid_moves = state.valid_moves();
-        let max_logit = valid_moves
-            .iter()
-            .map(|&action| logits[action as usize])
-            .fold(f32::NEG_INFINITY, f32::max);
-        let mut priors = [0.0; 7];
-        let mut total = 0.0;
 
-        for action in valid_moves {
-            let action = action as usize;
-            let prior = (logits[action] - max_logit).exp();
-            priors[action] = prior;
-            total += prior;
-        }
+        let outputs = boards.iter().enumerate().map(|(index, board)| {
+            let row = &logits[index * 7..(index + 1) * 7];
+            let valid_moves = board.valid_moves();
+            let max_logit = valid_moves
+                .iter()
+                .map(|&action| row[action as usize])
+                .fold(f32::NEG_INFINITY, f32::max);
+            let mut priors = [0.0; 7];
+            let mut total = 0.0;
 
-        for prior in &mut priors {
-            *prior /= total;
-        }
+            for action in valid_moves {
+                let action = action as usize;
+                let prior = (row[action] - max_logit).exp();
+                priors[action] = prior;
+                total += prior;
+            }
 
-        let value = value_data.iter::<f32>().next().unwrap();
+            for prior in &mut priors {
+                *prior /= total;
+            }
+            EvalOutput { priors, value: values[index] }
+        }).collect();
+
         let mut timing = self.timing.get();
         timing.calls += 1;
         timing.input += input_done.duration_since(started);
@@ -65,6 +78,6 @@ impl<B: Backend> ZeroNetPolicy<B> {
         timing.total += started.elapsed();
         self.timing.set(timing);
         
-        (priors, value)
+        outputs
     }
 }

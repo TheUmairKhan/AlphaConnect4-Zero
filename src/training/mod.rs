@@ -1,4 +1,5 @@
 pub mod config;
+mod accelerator;
 mod evaluation;
 pub mod generator;
 mod l2;

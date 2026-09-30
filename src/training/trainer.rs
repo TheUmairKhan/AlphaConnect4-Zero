@@ -11,13 +11,14 @@ use crate::{
     mcts::policy::ZeroNetPolicy,
     model::zeronet::{ZeroNet, ZeroNetConfig},
     training::{
+        accelerator,
         config::TrainingConfig,
         evaluation::evaluate,
+        generator::generate_self_play_games,
         l2::squared_l2,
         metrics::{MetricsLogger, StepMetrics},
         performance::{TimingLogger, UpdateTiming},
         replay::ReplayBuffer,
-        self_play::self_play,
     },
 };
 
@@ -40,16 +41,26 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
         let iteration_started = Instant::now();
         let self_play_started = Instant::now();
         let mut positions = 0;
-        for game_number in 1..=config.training.games_per_iteration {
-            let game = self_play(
-                ZeroNetPolicy::new(best.clone(), device.clone()),
-                config,
-            )?;
-            positions += game.examples.len();
-            timing_logger.game(iteration, game_number, &game.timing, config.self_play.simulations)?;
-            replay.push(game.examples);
-        }
+        let policy = ZeroNetPolicy::new(best.clone(), device.clone());
+        let batch_summary = generate_self_play_games(
+            config,
+            |request_receiver, worker_count| accelerator::serve_requests(
+                request_receiver,
+                worker_count,
+                config.self_play.evaluation_batch_size,
+                |boards| policy.evaluate(boards),
+            ),
+            |game_number, game| {
+                positions += game.examples.len();
+                timing_logger.game(iteration, game_number, &game.timing, config.self_play.simulations)
+                    .expect("failed to log self-play game");
+                replay.push(game.examples);
+            },
+        );
         let self_play_elapsed = self_play_started.elapsed();
+        timing_logger.accelerator(iteration, &batch_summary, policy.timing())?;
+        println!("self-play evaluation: {} requests in {} batches (largest batch {})",
+            batch_summary.requests, batch_summary.batches, batch_summary.largest_batch);
 
         if replay.positions() < config.training.batch_size {
             return Err("not enough self-play positions for one training batch".into());

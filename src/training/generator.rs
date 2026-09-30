@@ -6,19 +6,19 @@ use std::{
     thread,
 };
 
-use crate::mcts::evaluation::{EvalClient, LeafRequest};
+use crate::mcts::evaluation::{EvalClient, EvalMessage};
 
 use super::{config::TrainingConfig, self_play::{SelfPlayGame, self_play}};
 
 /// Runs self-play workers while `serve_requests` handles their leaf evaluations.
 /// Each completed game is passed to `on_game` as soon as a worker finishes it.
-pub fn generate_self_play_games<F, G>(
+pub fn generate_self_play_games<F, G, R>(
     config: &TrainingConfig,
     serve_requests: F,
     mut on_game: G,
-)
+) -> R
 where
-    F: FnOnce(Receiver<LeafRequest>),
+    F: FnOnce(Receiver<EvalMessage>, usize) -> R,
     G: FnMut(usize, SelfPlayGame) + Send,
 {
     let game_count = config.training.games_per_iteration;
@@ -50,22 +50,25 @@ where
                     completed_sender.send((game_index + 1, game))
                         .expect("completed-game receiver closed");
                 }
+                request_sender.send(EvalMessage::WorkerFinished)
+                    .expect("evaluation request queue closed");
             }));
         }
         drop(request_sender);
         drop(completed_sender);
-        serve_requests(request_receiver);
+        let service_result = serve_requests(request_receiver, worker_count);
 
         for worker in workers {
             worker.join().expect("self-play worker panicked");
         }
         collector.join().expect("completed-game collector panicked");
-    });
+        service_result
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::mcts::evaluation::EvalOutput;
+    use crate::mcts::evaluation::{EvalMessage, EvalOutput};
 
     use super::{super::config::TrainingConfig, generate_self_play_games};
 
@@ -79,12 +82,14 @@ mod tests {
         let mut completed = Vec::new();
         generate_self_play_games(
             &config,
-            |request_receiver| {
-                for request in request_receiver {
-                    request.sender.send(EvalOutput {
-                        priors: [1.0 / 7.0; 7],
-                        value: 0.0,
-                    }).unwrap();
+            |request_receiver, _worker_count| {
+                for message in request_receiver {
+                    if let EvalMessage::Request(request) = message {
+                        request.sender.send(EvalOutput {
+                            priors: [1.0 / 7.0; 7],
+                            value: 0.0,
+                        }).unwrap();
+                    }
                 }
             },
             |game_number, game| {
