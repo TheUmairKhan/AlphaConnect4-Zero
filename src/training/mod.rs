@@ -1,5 +1,6 @@
 pub mod config;
 mod evaluation;
+pub mod generator;
 mod l2;
 mod metrics;
 mod performance;

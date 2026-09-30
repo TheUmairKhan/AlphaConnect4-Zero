@@ -1,5 +1,6 @@
 # Self-play search and exploration settings.
 [self_play]
+parallel_games = 50
 simulations = 100
 dirichlet_alpha = 0.3
 dirichlet_epsilon = 0.25

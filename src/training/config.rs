@@ -45,6 +45,7 @@ pub struct EvaluationConfig {
 
 #[derive(Deserialize)]
 pub struct SelfPlayConfig {
+    pub parallel_games: usize,
     pub simulations: u32,
     pub dirichlet_alpha: f32,
     pub dirichlet_epsilon: f32,
@@ -107,8 +108,8 @@ impl SelfPlayConfig {
     }
 
     fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.simulations == 0 {
-            return Err("simulations must be positive".into());
+        if self.simulations == 0 || self.parallel_games == 0 {
+            return Err("simulations and parallel_games must be positive".into());
         }
         if !self.dirichlet_alpha.is_finite() || self.dirichlet_alpha <= 0.0 {
             return Err("dirichlet_alpha must be positive".into());
