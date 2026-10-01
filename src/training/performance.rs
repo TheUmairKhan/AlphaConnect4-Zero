@@ -20,6 +20,21 @@ pub struct UpdateTiming {
     pub logging: Duration,
 }
 
+const RATE_WINDOW_SECS: f64 = 30.0;
+
+struct GameSample {
+    t: f64,
+    positions: usize,
+    eval_wait: Duration,
+    eval_calls: usize,
+}
+
+fn prune<T>(window: &mut VecDeque<T>, now: f64, time_of: impl Fn(&T) -> f64) {
+    while window.len() > 1 && now - time_of(window.front().unwrap()) > RATE_WINDOW_SECS {
+        window.pop_front();
+    }
+}
+
 pub struct TimingLogger {
     games: BufWriter<File>,
     moves: BufWriter<File>,
@@ -32,11 +47,9 @@ pub struct TimingLogger {
     started: Instant,
     batches: usize,
     requests: usize,
-    total_games: usize,
-    total_positions: usize,
-    total_eval_wait: Duration,
-    total_eval_calls: usize,
-    last_update_total: Duration,
+    game_window: VecDeque<GameSample>,
+    eval_window: VecDeque<(f64, usize)>,
+    update_window: VecDeque<(f64, Duration)>,
     model_timing: NetworkTiming,
     last_network: String,
     last_run: String,
@@ -67,11 +80,9 @@ impl TimingLogger {
             started: Instant::now(),
             batches: 0,
             requests: 0,
-            total_games: 0,
-            total_positions: 0,
-            total_eval_wait: Duration::ZERO,
-            total_eval_calls: 0,
-            last_update_total: Duration::ZERO,
+            game_window: VecDeque::new(),
+            eval_window: VecDeque::new(),
+            update_window: VecDeque::new(),
             model_timing: NetworkTiming::default(),
             last_network: "No self-play evaluation completed yet".to_string(),
             last_run: "Training in progress".to_string(),
@@ -80,11 +91,19 @@ impl TimingLogger {
         Ok(logger)
     }
 
+    fn now(&self) -> f64 {
+        self.started.elapsed().as_secs_f64()
+    }
+
     pub fn game(&mut self, game: usize, timing: &GameTiming, simulations_per_move: u32, positions: usize) -> io::Result<()> {
-        self.total_games += 1;
-        self.total_positions += positions;
-        self.total_eval_wait += timing.network.total;
-        self.total_eval_calls += timing.network.calls;
+        let now = self.now();
+        self.game_window.push_back(GameSample {
+            t: now,
+            positions,
+            eval_wait: timing.network.total,
+            eval_calls: timing.network.calls,
+        });
+        prune(&mut self.game_window, now, |sample| sample.t);
         let search: Duration = timing.moves.iter().map(|m| m.search).sum();
         let search_wait: Duration = timing.moves.iter().map(|m| m.search_network).sum();
         let tree = search.saturating_sub(search_wait);
@@ -118,6 +137,9 @@ impl TimingLogger {
     }
 
     pub fn accelerator_batch(&mut self, model_step: usize, requests: usize, timing: NetworkTiming) -> io::Result<()> {
+        let now = self.now();
+        self.eval_window.push_back((now, requests));
+        prune(&mut self.eval_window, now, |sample| sample.0);
         self.batches += 1;
         self.requests += requests;
         self.model_timing.input += timing.input;
@@ -135,7 +157,9 @@ impl TimingLogger {
     }
 
     pub fn update(&mut self, step: usize, timing: UpdateTiming) -> io::Result<()> {
-        self.last_update_total = timing.total;
+        let now = self.now();
+        self.update_window.push_back((now, timing.total));
+        prune(&mut self.update_window, now, |sample| sample.0);
         writeln!(self.updates, "{step},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
             ms(timing.total), ms(timing.sample), ms(timing.forward), ms(timing.loss_metrics),
             ms(timing.backward), ms(timing.optimizer), ms(timing.logging))?;
@@ -161,12 +185,33 @@ impl TimingLogger {
     }
 
     fn write_html(&self) -> io::Result<()> {
-        let elapsed = self.started.elapsed().as_secs_f64().max(f64::MIN_POSITIVE);
-        let games_per_second = self.total_games as f64 / elapsed;
-        let positions_per_second = self.total_positions as f64 / elapsed;
-        let evals_per_second = self.requests as f64 / elapsed;
-        let avg_eval_latency_ms = if self.total_eval_calls > 0 {
-            ms(self.total_eval_wait) / self.total_eval_calls as f64
+        let now = self.now();
+
+        let (games_per_second, positions_per_second) = if self.game_window.len() >= 2 {
+            let span = (now - self.game_window.front().unwrap().t).max(f64::MIN_POSITIVE);
+            let positions: usize = self.game_window.iter().map(|sample| sample.positions).sum();
+            (self.game_window.len() as f64 / span, positions as f64 / span)
+        } else {
+            (0.0, 0.0)
+        };
+
+        let evals_per_second = if self.eval_window.len() >= 2 {
+            let span = (now - self.eval_window.front().unwrap().0).max(f64::MIN_POSITIVE);
+            let requests: usize = self.eval_window.iter().map(|(_, requests)| requests).sum();
+            requests as f64 / span
+        } else {
+            0.0
+        };
+
+        let avg_eval_latency_ms = {
+            let wait: Duration = self.game_window.iter().map(|sample| sample.eval_wait).sum();
+            let calls: usize = self.game_window.iter().map(|sample| sample.eval_calls).sum();
+            if calls > 0 { ms(wait) / calls as f64 } else { 0.0 }
+        };
+
+        let avg_update_ms = if !self.update_window.is_empty() {
+            let total: Duration = self.update_window.iter().map(|(_, total)| *total).sum();
+            ms(total) / self.update_window.len() as f64
         } else {
             0.0
         };
@@ -184,8 +229,7 @@ impl TimingLogger {
 
         let mut html = String::from("<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"5\"><title>Connect 4 performance</title><style>body{font-family:system-ui,sans-serif;background:#101827;color:#e5eaf3;margin:24px}section{background:#1a2537;padding:16px;border-radius:10px;margin:16px 0;overflow-x:auto}table{border-collapse:collapse;width:100%}th,td{text-align:right;padding:6px 10px;border-bottom:1px solid #344155}th:first-child,td:first-child{text-align:left}small{color:#b9c4d6}</style></head><body><h1>Connect 4 performance</h1><p>Refreshes every 5 seconds. Durations are wall-clock milliseconds; evaluation wait is included in search time.</p>");
         html.push_str(&format!(
-            "<section><h2>Rates</h2><p>{games_per_second:.2} games/s &middot; {positions_per_second:.1} positions/s &middot; {evals_per_second:.1} evals/s &middot; {avg_eval_latency_ms:.2} ms avg evaluation latency &middot; {:.1} ms/update</p><p><small>Rates averaged over the {elapsed:.0}s since run start.</small></p></section>",
-            ms(self.last_update_total)
+            "<section><h2>Rates</h2><p>{games_per_second:.2} games/s &middot; {positions_per_second:.1} positions/s &middot; {evals_per_second:.1} evals/s &middot; {avg_eval_latency_ms:.2} ms avg evaluation latency &middot; {avg_update_ms:.1} ms/update</p><p><small>Rolling average over the last {RATE_WINDOW_SECS:.0}s (or less, early in a run).</small></p></section>"
         ));
         html.push_str(&format!(
             "<section><h2>Self-play evaluator</h2><p>{}</p><p>GPU time split: input {input_pct:.1}% &middot; forward {forward_pct:.1}% &middot; readback {readback_pct:.1}%</p></section><section><h2>Training run</h2><p>{}</p></section>",
