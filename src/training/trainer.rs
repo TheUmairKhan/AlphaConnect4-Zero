@@ -55,7 +55,7 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
                 config,
                 |request_receiver| accelerator::serve_requests(
                     request_receiver,
-                    config.self_play.evaluation_batch_size,
+                    config.self_play.threads,
                     |boards| {
                         if let Some((step, latest)) = pending_model.lock().unwrap().take() {
                             policy = ZeroNetPolicy::new(latest, device.clone());

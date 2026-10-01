@@ -40,7 +40,7 @@ struct PendingExample {
     player: Player,
 }
 
-pub fn self_play<E: LeafEvaluator>(
+pub async fn self_play<E: LeafEvaluator>(
     evaluator: E,
     config: &TrainingConfig,
 ) -> Result<SelfPlayGame, GammaError> {
@@ -49,7 +49,7 @@ pub fn self_play<E: LeafEvaluator>(
     let gamma = Gamma::new(self_play.dirichlet_alpha as f64, 1.0)?;
     let mut rng = rand::rng();
     let mut env = Connect4Env::new();
-    let mut mcts = MCTS::new(env, evaluator, self_play.simulations, config.search.c_puct);
+    let mut mcts = MCTS::new(env, evaluator, self_play.simulations, config.search.c_puct).await;
     let mut positions = Vec::new();
     let mut move_timings = Vec::new();
 
@@ -62,10 +62,10 @@ pub fn self_play<E: LeafEvaluator>(
         mcts.add_root_noise(&gamma, self_play.dirichlet_epsilon, &mut rng);
         let network_before_search = mcts.network_timing().total;
         let search_started = Instant::now();
-        mcts.search();
+        mcts.search().await;
         let search = search_started.elapsed();
         let search_network = mcts.network_timing().total - network_before_search;
-        let (action, policy) = mcts.select_action(self_play.temperature(positions.len()), &mut rng);
+        let (action, policy) = mcts.select_action(self_play.temperature(positions.len()), &mut rng).await;
         positions.push(PendingExample { state, policy, player });
 
         let outcome = env.step(action as u8);

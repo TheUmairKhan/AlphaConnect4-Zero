@@ -1,53 +1,57 @@
 use std::sync::mpsc::Receiver;
 
-use crate::{board::Board, mcts::evaluation::{EvalOutput, LeafRequest}};
+use crate::{board::Board, mcts::evaluation::{BatchRequest, EvalOutput}};
 
 pub fn serve_requests<F>(
-    request_receiver: Receiver<LeafRequest>,
-    batch_size: usize,
+    request_receiver: Receiver<BatchRequest>,
+    threads: usize,
     mut evaluate: F,
 )
 where
     F: FnMut(&[Board]) -> Vec<EvalOutput>,
 {
-    let mut requests = Vec::with_capacity(batch_size);
+    let mut requests = Vec::with_capacity(threads);
+    let mut boards = Vec::new();
 
     for request in request_receiver {
         requests.push(request);
 
-        if requests.len() == batch_size {
-            let boards: Vec<Board> = requests.iter().map(|request| request.board).collect();
-            let outputs = evaluate(&boards);
+        if requests.len() == threads {
+            boards.clear();
+            boards.extend(requests.iter().flat_map(|request| request.boards.iter().copied()));
+            let mut outputs = evaluate(&boards).into_iter();
 
-            for (request, output) in requests.drain(..).zip(outputs) {
-                request.sender.send(output).expect("evaluation client stopped before receiving its result");
+            for request in requests.drain(..) {
+                let reply = outputs.by_ref().take(request.boards.len()).collect();
+                request.sender.send(reply).expect("self-play thread stopped before receiving its results");
             }
         }
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use std::{sync::mpsc, thread, time::Duration};
 
-    use crate::{board::Board, mcts::evaluation::{EvalOutput, LeafRequest}};
+    use crate::{board::Board, mcts::evaluation::{BatchRequest, EvalOutput}};
 
     use super::serve_requests;
 
-    #[test]
-    fn full_batches_route_results() {
-        let (request_sender, request_receiver) = mpsc::channel();
-        let mut replies = Vec::new();
-        for pieces in 0..4 {
-            let mut board = Board::new();
-            for _ in 0..pieces {
-                board.place_piece(0);
-            }
-            let (sender, receiver) = mpsc::sync_channel(1);
-            request_sender.send(LeafRequest { board, sender }).unwrap();
-            replies.push(receiver);
+    fn board_with(pieces: usize) -> Board {
+        let mut board = Board::new();
+        for _ in 0..pieces {
+            board.place_piece(0);
         }
+        board
+    }
+
+    #[test]
+    fn joins_thread_batches_and_routes_results() {
+        let (request_sender, request_receiver) = mpsc::channel();
+        let (first_sender, first_reply) = mpsc::sync_channel(1);
+        let (second_sender, second_reply) = mpsc::sync_channel(1);
+        request_sender.send(BatchRequest { boards: vec![board_with(0), board_with(1)], sender: first_sender }).unwrap();
+        request_sender.send(BatchRequest { boards: vec![board_with(2), board_with(3), board_with(4)], sender: second_sender }).unwrap();
         drop(request_sender);
 
         let mut batch_sizes = Vec::new();
@@ -59,14 +63,16 @@ mod tests {
             }).collect()
         });
 
-        assert_eq!(batch_sizes, [2, 2]);
-        for (pieces, receiver) in replies.into_iter().enumerate() {
-            assert_eq!(receiver.recv().unwrap().value, pieces as f32);
-        }
+        assert_eq!(batch_sizes, [5]);
+        let values = |reply: mpsc::Receiver<Vec<EvalOutput>>| {
+            reply.recv().unwrap().iter().map(|output| output.value).collect::<Vec<_>>()
+        };
+        assert_eq!(values(first_reply), [0.0, 1.0]);
+        assert_eq!(values(second_reply), [2.0, 3.0, 4.0]);
     }
 
     #[test]
-    fn waits_for_a_full_batch() {
+    fn waits_for_every_thread() {
         let (request_sender, request_receiver) = mpsc::channel();
         let (first_sender, first_reply) = mpsc::sync_channel(1);
         let (second_sender, second_reply) = mpsc::sync_channel(1);
@@ -77,11 +83,11 @@ mod tests {
                     boards.iter().map(|_| EvalOutput { priors: [1.0 / 7.0; 7], value: 0.5 }).collect()
                 })
             });
-            request_sender.send(LeafRequest { board: Board::new(), sender: first_sender }).unwrap();
+            request_sender.send(BatchRequest { boards: vec![Board::new()], sender: first_sender }).unwrap();
             let replied_early = first_reply.recv_timeout(Duration::from_millis(20)).is_ok();
-            request_sender.send(LeafRequest { board: Board::new(), sender: second_sender }).unwrap();
-            assert_eq!(first_reply.recv_timeout(Duration::from_secs(1)).unwrap().value, 0.5);
-            assert_eq!(second_reply.recv_timeout(Duration::from_secs(1)).unwrap().value, 0.5);
+            request_sender.send(BatchRequest { boards: vec![Board::new()], sender: second_sender }).unwrap();
+            assert_eq!(first_reply.recv_timeout(Duration::from_secs(1)).unwrap()[0].value, 0.5);
+            assert_eq!(second_reply.recv_timeout(Duration::from_secs(1)).unwrap()[0].value, 0.5);
             drop(request_sender);
             service.join().unwrap();
             assert!(!replied_early);

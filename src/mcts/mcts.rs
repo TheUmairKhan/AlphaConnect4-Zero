@@ -42,9 +42,9 @@ use super::{evaluation::LeafEvaluator, policy::NetworkTiming};
     }
 
     impl<E: LeafEvaluator> MCTS<E> {
-        pub fn new(state: Connect4Env, evaluator: E, simulations: u32, c_puct: f32) -> Self {
+        pub async fn new(state: Connect4Env, evaluator: E, simulations: u32, c_puct: f32) -> Self {
             let mut root = Node::new(state);
-            root.priors = evaluator.evaluate(*root.state.state()).priors;
+            root.priors = evaluator.evaluate(*root.state.state()).await.priors;
             Self {
                 nodes: vec![root],
                 evaluator,
@@ -75,7 +75,7 @@ use super::{evaluation::LeafEvaluator, policy::NetworkTiming};
             }
         }
 
-        pub fn select_action<R: Rng + ?Sized>(&mut self, temperature: f32, rng: &mut R) -> (usize, [f32; 7]) {
+        pub async fn select_action<R: Rng + ?Sized>(&mut self, temperature: f32, rng: &mut R) -> (usize, [f32; 7]) {
             let policy = self.target_policy(temperature);
             let draw = rng.random::<f32>();
             let mut cumulative = 0.0;
@@ -91,17 +91,17 @@ use super::{evaluation::LeafEvaluator, policy::NetworkTiming};
                 }
             }
 
-            self.advance_root(action);
+            self.advance_root(action).await;
             (action, policy)
         }
 
-        pub fn advance_root(&mut self, action: usize) {
+        pub async fn advance_root(&mut self, action: usize) {
             let child_idx = match self.nodes[self.root_idx].children[action] {
                 Some(idx) => idx,
                 None => {
                     let idx = self.expand(self.root_idx, action as u8);
                     if matches!(self.nodes[idx].state.state().result(), GameResult::Ongoing) {
-                        self.nodes[idx].priors = self.evaluator.evaluate(*self.nodes[idx].state.state()).priors;
+                        self.nodes[idx].priors = self.evaluator.evaluate(*self.nodes[idx].state.state()).await.priors;
                     }
                     idx
                 }
@@ -110,14 +110,14 @@ use super::{evaluation::LeafEvaluator, policy::NetworkTiming};
             self.root_idx = child_idx;
         }
 
-        pub fn search(&mut self) {
+        pub async fn search(&mut self) {
             for _ in 0..self.simulations {
                 match self.select() {
                     SelectionResult::Expand { leaf_idx, action } => {
                         let child_idx = self.expand(leaf_idx, action as u8);
                         match self.nodes[child_idx].state.state().result() {
                             GameResult::Ongoing => {
-                                let result = self.evaluator.evaluate(*self.nodes[child_idx].state.state());
+                                let result = self.evaluator.evaluate(*self.nodes[child_idx].state.state()).await;
                                 self.nodes[child_idx].priors = result.priors;
                                 self.backpropagate(child_idx, result.value);
                             }
@@ -262,6 +262,8 @@ use super::{evaluation::LeafEvaluator, policy::NetworkTiming};
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
+    use futures::executor::block_on;
+
     use crate::{board::Board, env::Connect4Env};
 
     use super::{super::{evaluation::{EvalOutput, LeafEvaluator}, policy::NetworkTiming}, MCTS};
@@ -269,7 +271,7 @@ mod tests {
     struct CountingEvaluator(Rc<Cell<usize>>);
 
     impl LeafEvaluator for CountingEvaluator {
-        fn evaluate(&self, _board: Board) -> EvalOutput {
+        async fn evaluate(&self, _board: Board) -> EvalOutput {
             self.0.set(self.0.get() + 1);
             EvalOutput { priors: [1.0 / 7.0; 7], value: 0.25 }
         }
@@ -280,13 +282,13 @@ mod tests {
     #[test]
     fn root_leaf_and_unexpanded_next_root_use_the_evaluator() {
         let calls = Rc::new(Cell::new(0));
-        let mut search = MCTS::new(Connect4Env::new(), CountingEvaluator(calls.clone()), 1, 1.0);
+        let mut search = block_on(MCTS::new(Connect4Env::new(), CountingEvaluator(calls.clone()), 1, 1.0));
         assert_eq!(calls.get(), 1);
 
-        search.search();
+        block_on(search.search());
         assert_eq!(calls.get(), 2);
 
-        search.advance_root(1);
+        block_on(search.advance_root(1));
         assert_eq!(calls.get(), 3);
     }
 }

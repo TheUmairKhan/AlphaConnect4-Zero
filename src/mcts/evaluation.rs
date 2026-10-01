@@ -1,10 +1,9 @@
 use std::{
-    cell::Cell,
-    sync::mpsc::{self, SyncSender},
-    time::Instant,
+    cell::{Cell, RefCell}, rc::Rc, sync::mpsc::SyncSender, time::Instant,
 };
 
 use burn::prelude::Backend;
+use futures::channel::oneshot;
 
 use crate::board::Board;
 
@@ -17,54 +16,48 @@ pub struct EvalOutput {
 }
 
 pub trait LeafEvaluator {
-    fn evaluate(&self, board: Board) -> EvalOutput;
+    async fn evaluate(&self, board: Board) -> EvalOutput;
     fn timing(&self) -> NetworkTiming;
 }
 
-pub struct LeafRequest {
-    pub board: Board,
-    pub sender: SyncSender<EvalOutput>,
+pub struct BatchRequest {
+    pub boards: Vec<Board>,
+    pub sender: SyncSender<Vec<EvalOutput>>,
 }
-
-#[derive(Clone)]
-pub struct EvalClient {
-    requests: SyncSender<LeafRequest>,
+pub struct BatchingClient {
+    queue: Rc<RefCell<Vec<(Board, oneshot::Sender<EvalOutput>)>>>,
     timing: Cell<NetworkTiming>,
 }
 
-impl EvalClient {
-    pub fn new(requests: SyncSender<LeafRequest>) -> Self {
+impl BatchingClient {
+    pub fn new(queue: Rc<RefCell<Vec<(Board, oneshot::Sender<EvalOutput>)>>>) -> Self {
         Self {
-            requests,
+            queue,
             timing: Cell::new(NetworkTiming::default()),
         }
     }
 }
 
-impl LeafEvaluator for EvalClient {
-    fn evaluate(&self, board: Board) -> EvalOutput {
+impl LeafEvaluator for BatchingClient {
+    async fn evaluate(&self, board: Board) -> EvalOutput {
         let started = Instant::now();
-        let (sender, receiver) = mpsc::sync_channel(1);
-        self.requests
-            .send(LeafRequest { board, sender })
-            .expect("evaluation request queue closed");
-        let output = receiver.recv().expect("evaluation reply channel closed");
+        let (sender, receiver) = oneshot::channel();
+        self.queue.borrow_mut().push((board, sender));
+        let output = receiver.await.expect("batch dropped");
 
-        // For a client, total includes queue wait and evaluation, not just model execution.
         let mut timing = self.timing.get();
         timing.calls += 1;
         timing.total += started.elapsed();
         self.timing.set(timing);
+
         output
     }
 
-    fn timing(&self) -> NetworkTiming {
-        self.timing.get()
-    }
+    fn timing(&self) -> NetworkTiming { self.timing.get() }
 }
 
 impl<B: Backend> LeafEvaluator for ZeroNetPolicy<B> {
-    fn evaluate(&self, board: Board) -> EvalOutput {
+    async fn evaluate(&self, board: Board) -> EvalOutput {
         ZeroNetPolicy::evaluate(self, std::slice::from_ref(&board)).pop().unwrap()
     }
 

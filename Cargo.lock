@@ -1299,6 +1299,7 @@ name = "connect-4"
 version = "0.1.0"
 dependencies = [
  "burn",
+ "futures",
  "rand 0.10.3",
  "rand_distr 0.6.0",
  "serde",

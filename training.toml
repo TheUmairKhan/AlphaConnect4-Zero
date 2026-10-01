@@ -1,7 +1,9 @@
 # Self-play search and exploration settings.
 [self_play]
-parallel_games = 256
-evaluation_batch_size = 256
+# Each thread plays games_per_thread games at once; every evaluation batch holds
+# threads * games_per_thread boards.
+threads = 8
+games_per_thread = 32
 model_refresh_per_updates = 50
 simulations = 100
 dirichlet_alpha = 0.3

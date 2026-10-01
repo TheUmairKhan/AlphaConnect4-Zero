@@ -34,8 +34,8 @@ pub struct TrainerConfig {
 
 #[derive(Deserialize)]
 pub struct SelfPlayConfig {
-    pub parallel_games: usize,
-    pub evaluation_batch_size: usize,
+    pub threads: usize,
+    pub games_per_thread: usize,
     pub model_refresh_per_updates: usize,
     pub simulations: u32,
     pub dirichlet_alpha: f32,
@@ -87,11 +87,8 @@ impl SelfPlayConfig {
     }
 
     fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.simulations == 0 || self.parallel_games == 0 || self.evaluation_batch_size == 0 || self.model_refresh_per_updates == 0 {
-            return Err("simulations, parallel_games, evaluation_batch_size, and model_refresh_per_updates must be positive".into());
-        }
-        if self.evaluation_batch_size > self.parallel_games {
-            return Err("evaluation_batch_size must not exceed parallel_games".into());
+        if self.simulations == 0 || self.threads == 0 || self.games_per_thread == 0 || self.model_refresh_per_updates == 0 {
+            return Err("simulations, threads, games_per_thread, and model_refresh_per_updates must be positive".into());
         }
         if !self.dirichlet_alpha.is_finite() || self.dirichlet_alpha <= 0.0 {
             return Err("dirichlet_alpha must be positive".into());
