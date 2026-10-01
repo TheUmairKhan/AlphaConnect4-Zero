@@ -54,6 +54,7 @@ impl<B: Backend> ZeroNetPolicy<B> {
         );
         let input_done = Instant::now();
         let (policy_logits, value) = self.model.forward(input);
+        B::sync(&self.device).expect("failed to synchronize device after forward pass");
         let forward_done = Instant::now();
         let data = Transaction::default().register(policy_logits).register(value).execute();
         let logits: Vec<f32> = data[0].iter::<f32>().collect();

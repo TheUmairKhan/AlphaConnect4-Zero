@@ -1,7 +1,7 @@
 # Self-play search and exploration settings.
 [self_play]
-parallel_games = 150
-evaluation_batch_size = 128
+parallel_games = 256
+evaluation_batch_size = 256
 model_refresh_per_updates = 50
 simulations = 100
 dirichlet_alpha = 0.3

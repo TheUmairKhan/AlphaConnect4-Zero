@@ -77,7 +77,7 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
                 |game_number, game| {
                     let positions = game.examples.len();
                     timing_logger.lock().unwrap()
-                        .game(game_number, &game.timing, config.self_play.simulations)
+                        .game(game_number, &game.timing, config.self_play.simulations, positions)
                         .expect("failed to log self-play game");
                     let (buffer, ready) = &replay;
                     buffer.lock().unwrap().push(game.examples);

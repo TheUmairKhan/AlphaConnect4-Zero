@@ -3,7 +3,7 @@ use std::{
     fs::{self, File},
     io::{self, BufWriter, Write},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::mcts::policy::NetworkTiming;
@@ -29,8 +29,14 @@ pub struct TimingLogger {
     html_path: PathBuf,
     recent_games: VecDeque<String>,
     recent_updates: VecDeque<String>,
+    started: Instant,
     batches: usize,
     requests: usize,
+    total_games: usize,
+    total_positions: usize,
+    total_eval_wait: Duration,
+    total_eval_calls: usize,
+    last_update_total: Duration,
     model_timing: NetworkTiming,
     last_network: String,
     last_run: String,
@@ -58,8 +64,14 @@ impl TimingLogger {
             html_path: directory.join("performance.html"),
             recent_games: VecDeque::new(),
             recent_updates: VecDeque::new(),
+            started: Instant::now(),
             batches: 0,
             requests: 0,
+            total_games: 0,
+            total_positions: 0,
+            total_eval_wait: Duration::ZERO,
+            total_eval_calls: 0,
+            last_update_total: Duration::ZERO,
             model_timing: NetworkTiming::default(),
             last_network: "No self-play evaluation completed yet".to_string(),
             last_run: "Training in progress".to_string(),
@@ -68,7 +80,11 @@ impl TimingLogger {
         Ok(logger)
     }
 
-    pub fn game(&mut self, game: usize, timing: &GameTiming, simulations_per_move: u32) -> io::Result<()> {
+    pub fn game(&mut self, game: usize, timing: &GameTiming, simulations_per_move: u32, positions: usize) -> io::Result<()> {
+        self.total_games += 1;
+        self.total_positions += positions;
+        self.total_eval_wait += timing.network.total;
+        self.total_eval_calls += timing.network.calls;
         let search: Duration = timing.moves.iter().map(|m| m.search).sum();
         let search_wait: Duration = timing.moves.iter().map(|m| m.search_network).sum();
         let tree = search.saturating_sub(search_wait);
@@ -119,6 +135,7 @@ impl TimingLogger {
     }
 
     pub fn update(&mut self, step: usize, timing: UpdateTiming) -> io::Result<()> {
+        self.last_update_total = timing.total;
         writeln!(self.updates, "{step},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
             ms(timing.total), ms(timing.sample), ms(timing.forward), ms(timing.loss_metrics),
             ms(timing.backward), ms(timing.optimizer), ms(timing.logging))?;
@@ -144,14 +161,40 @@ impl TimingLogger {
     }
 
     fn write_html(&self) -> io::Result<()> {
+        let elapsed = self.started.elapsed().as_secs_f64().max(f64::MIN_POSITIVE);
+        let games_per_second = self.total_games as f64 / elapsed;
+        let positions_per_second = self.total_positions as f64 / elapsed;
+        let evals_per_second = self.requests as f64 / elapsed;
+        let avg_eval_latency_ms = if self.total_eval_calls > 0 {
+            ms(self.total_eval_wait) / self.total_eval_calls as f64
+        } else {
+            0.0
+        };
+
+        let model_total = self.model_timing.total.as_secs_f64();
+        let (input_pct, forward_pct, readback_pct) = if model_total > 0.0 {
+            (
+                self.model_timing.input.as_secs_f64() / model_total * 100.0,
+                self.model_timing.forward.as_secs_f64() / model_total * 100.0,
+                self.model_timing.readback.as_secs_f64() / model_total * 100.0,
+            )
+        } else {
+            (0.0, 0.0, 0.0)
+        };
+
         let mut html = String::from("<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"5\"><title>Connect 4 performance</title><style>body{font-family:system-ui,sans-serif;background:#101827;color:#e5eaf3;margin:24px}section{background:#1a2537;padding:16px;border-radius:10px;margin:16px 0;overflow-x:auto}table{border-collapse:collapse;width:100%}th,td{text-align:right;padding:6px 10px;border-bottom:1px solid #344155}th:first-child,td:first-child{text-align:left}small{color:#b9c4d6}</style></head><body><h1>Connect 4 performance</h1><p>Refreshes every 5 seconds. Durations are wall-clock milliseconds; evaluation wait is included in search time.</p>");
-        html.push_str(&format!("<section><h2>Self-play evaluator</h2><p>{}</p></section><section><h2>Training run</h2><p>{}</p></section>",
+        html.push_str(&format!(
+            "<section><h2>Rates</h2><p>{games_per_second:.2} games/s &middot; {positions_per_second:.1} positions/s &middot; {evals_per_second:.1} evals/s &middot; {avg_eval_latency_ms:.2} ms avg evaluation latency &middot; {:.1} ms/update</p><p><small>Rates averaged over the {elapsed:.0}s since run start.</small></p></section>",
+            ms(self.last_update_total)
+        ));
+        html.push_str(&format!(
+            "<section><h2>Self-play evaluator</h2><p>{}</p><p>GPU time split: input {input_pct:.1}% &middot; forward {forward_pct:.1}% &middot; readback {readback_pct:.1}%</p></section><section><h2>Training run</h2><p>{}</p></section>",
             self.last_network, self.last_run));
         html.push_str("<section><h2>Recent self-play games</h2><table><tr><th>Game</th><th>Moves</th><th>Total ms</th><th>Search ms</th><th>Evaluation wait in search ms</th><th>Tree/other ms</th><th>Evaluation requests</th><th>Sims/s</th></tr>");
         for row in self.recent_games.iter().rev() { html.push_str(row); }
         html.push_str("</table></section><section><h2>Recent training updates</h2><table><tr><th>Step</th><th>Total ms</th><th>Sample ms</th><th>Forward ms</th><th>Loss/metrics ms</th><th>Backward ms</th><th>Optimizer ms</th><th>Logging ms</th></tr>");
         for row in self.recent_updates.iter().rev() { html.push_str(row); }
-        html.push_str("</table></section><small>GPU work is asynchronous: forward/optimizer are host-side timings. Readbacks and metric extraction synchronize the device. See timing_*.csv for per-move and network input/forward/readback details.</small></body></html>");
+        html.push_str("</table></section><small>GPU work is asynchronous. The self-play evaluator's forward timing syncs the device, so its input/forward/readback split is accurate. Training-update forward/backward/optimizer timings do not sync and only measure host-side kernel enqueue time. See timing_*.csv for per-move and network input/forward/readback details.</small></body></html>");
         fs::write(&self.html_path, html)
     }
 }
