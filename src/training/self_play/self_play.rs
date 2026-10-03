@@ -6,7 +6,7 @@ use crate::{
     board::{GameResult, Player},
     env::Connect4Env,
     mcts::{evaluation::LeafEvaluator, mcts::MCTS, policy::NetworkTiming},
-    training::config::TrainingConfig,
+    config::TrainingConfig,
 };
 
 #[derive(Clone)]

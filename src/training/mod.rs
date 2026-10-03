@@ -1,10 +1,4 @@
-pub mod config;
-mod accelerator;
-mod arena;
-pub mod generator;
-mod l2;
-mod metrics;
-mod performance;
-mod replay;
+pub mod accelerator;
+pub mod evaluation;
 pub mod self_play;
 pub mod trainer;

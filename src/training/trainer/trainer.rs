@@ -17,18 +17,23 @@ use burn::{
 };
 
 use crate::{
+    config::TrainingConfig,
     mcts::policy::ZeroNetPolicy,
-    model::zeronet::{ZeroNet, ZeroNetConfig},
-    training::{
-        accelerator,
-        arena,
-        config::TrainingConfig,
-        generator::generate_self_play_games,
-        l2::squared_l2,
+    metrics::{
         metrics::{MetricsLogger, StepMetrics},
         performance::{TimingLogger, UpdateTiming},
-        replay::{ReplayBuffer, batch_tensors},
     },
+    model::zeronet::{ZeroNet, ZeroNetConfig},
+    training::{
+        accelerator::accelerator,
+        evaluation::arena,
+        self_play::generator::generate_self_play_games,
+    },
+};
+
+use super::{
+    l2::squared_l2,
+    replay::{ReplayBuffer, batch_tensors},
 };
 
 pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> Result<(), Box<dyn Error>> {

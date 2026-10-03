@@ -2,12 +2,12 @@ use futures::executor::block_on;
 
 use crate::{
     board::{GameResult, Player},
+    config::TrainingConfig,
     env::Connect4Env,
     mcts::{evaluation::LeafEvaluator, mcts::MCTS},
-    minimax,
 };
 
-use super::config::TrainingConfig;
+use super::minimax;
 
 #[derive(Clone, Copy, Debug)]
 pub struct MatchSummary {
@@ -154,7 +154,7 @@ mod tests {
     use crate::{
         board::{Board, GameResult, Player},
         mcts::{evaluation::{EvalOutput, LeafEvaluator}, policy::NetworkTiming},
-        training::config::TrainingConfig,
+        config::TrainingConfig,
     };
 
     use super::{MatchSummary, play_game, play_match};
@@ -170,7 +170,7 @@ mod tests {
     }
 
     fn config(games: usize) -> TrainingConfig {
-        let mut config: TrainingConfig = toml::from_str(include_str!("../../training.toml")).unwrap();
+        let mut config: TrainingConfig = toml::from_str(include_str!("../../../training.toml")).unwrap();
         config.evaluation.games = games;
         config.evaluation.simulations = 50;
         config

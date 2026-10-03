@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use burn::prelude::*;
 use rand::{Rng, seq::index};
 
-use super::self_play::TrainingExample;
+use crate::training::self_play::self_play::TrainingExample;
 
 pub struct ReplayBuffer {
     games: VecDeque<Vec<TrainingExample>>,

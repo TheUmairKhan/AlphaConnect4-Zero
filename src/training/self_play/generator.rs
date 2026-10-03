@@ -9,7 +9,9 @@ use futures::channel::oneshot;
 
 use crate::{board::Board, mcts::evaluation::{BatchRequest, BatchingClient, EvalOutput}};
 
-use super::{config::TrainingConfig, self_play::{SelfPlayGame, self_play}};
+use crate::config::TrainingConfig;
+
+use super::self_play::{SelfPlayGame, self_play};
 
 /// Runs self-play workers until the training process exits.
 /// Each completed game is passed to `on_game` as soon as a worker finishes it.

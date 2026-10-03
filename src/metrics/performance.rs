@@ -8,7 +8,7 @@ use std::{
 
 use crate::mcts::policy::NetworkTiming;
 
-use super::self_play::GameTiming;
+use crate::training::self_play::self_play::GameTiming;
 
 pub struct UpdateTiming {
     pub total: Duration,

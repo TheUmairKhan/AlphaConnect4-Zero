@@ -7,7 +7,7 @@ use std::{
 
 use burn::prelude::*;
 
-use super::arena::MatchSummary;
+use crate::training::evaluation::arena::MatchSummary;
 
 pub struct StepMetrics {
     pub step: usize,
