@@ -8,6 +8,7 @@ pub struct TrainingConfig {
     pub self_play: SelfPlayConfig,
     pub model: ModelConfig,
     pub training: TrainerConfig,
+    pub evaluation: EvaluationConfig,
 }
 
 #[derive(Deserialize)]
@@ -30,6 +31,14 @@ pub struct TrainerConfig {
     pub l2_coefficient: f64,
     pub checkpoint_every_updates: usize,
     pub checkpoint_dir: String,
+}
+
+#[derive(Deserialize)]
+pub struct EvaluationConfig {
+    pub every_updates: usize,
+    pub depths: Vec<u32>,
+    pub games: usize,
+    pub simulations: u32,
 }
 
 #[derive(Deserialize)]
@@ -75,6 +84,16 @@ impl TrainingConfig {
         }
         if train.replay_capacity_games.saturating_mul(7) < train.batch_size {
             return Err("replay_capacity_games is too small to hold one batch".into());
+        }
+        let evaluation = &self.evaluation;
+        if evaluation.every_updates == 0 || evaluation.simulations == 0 {
+            return Err("evaluation every_updates and simulations must be positive".into());
+        }
+        if evaluation.games < 2 {
+            return Err("evaluation games must be at least 2 so the model plays both first and second".into());
+        }
+        if evaluation.depths.is_empty() || evaluation.depths.contains(&0) {
+            return Err("evaluation depths must be a non-empty list of positive depths".into());
         }
         Ok(())
     }

@@ -1,5 +1,6 @@
 pub mod config;
 mod accelerator;
+mod arena;
 pub mod generator;
 mod l2;
 mod metrics;

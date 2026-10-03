@@ -95,6 +95,15 @@ use super::{evaluation::LeafEvaluator, policy::NetworkTiming};
             (action, policy)
         }
 
+        pub fn best_action(&self) -> usize {
+            let root = &self.nodes[self.root_idx];
+            (0..7)
+                .filter_map(|action| root.children[action].map(|child| (action, self.nodes[child].visits)))
+                .max_by_key(|&(action, visits)| (visits, std::cmp::Reverse(action)))
+                .map(|(action, _)| action)
+                .expect("search has not expanded any root action")
+        }
+
         pub async fn advance_root(&mut self, action: usize) {
             let child_idx = match self.nodes[self.root_idx].children[action] {
                 Some(idx) => idx,

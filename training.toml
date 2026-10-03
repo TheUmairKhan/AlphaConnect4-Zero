@@ -1,9 +1,7 @@
 # Self-play search and exploration settings.
 [self_play]
-# Each thread plays games_per_thread games at once; every evaluation batch holds
-# threads * games_per_thread boards.
-threads = 8
-games_per_thread = 32
+threads = 16
+games_per_thread = 64
 model_refresh_per_updates = 50
 simulations = 100
 dirichlet_alpha = 0.3
@@ -11,6 +9,12 @@ dirichlet_epsilon = 0.25
 temperature_start = 1.0
 temperature_end = 0.1
 temperature_decay_moves = 10
+
+[evaluation]
+every_updates = 10
+depths = [2, 4, 6]
+games = 200
+simulations = 1000
 
 [search]
 c_puct = 1.0

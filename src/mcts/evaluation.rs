@@ -20,6 +20,16 @@ pub trait LeafEvaluator {
     fn timing(&self) -> NetworkTiming;
 }
 
+impl<E: LeafEvaluator> LeafEvaluator for &E {
+    async fn evaluate(&self, board: Board) -> EvalOutput {
+        (**self).evaluate(board).await
+    }
+
+    fn timing(&self) -> NetworkTiming {
+        (**self).timing()
+    }
+}
+
 pub struct BatchRequest {
     pub boards: Vec<Board>,
     pub sender: SyncSender<Vec<EvalOutput>>,

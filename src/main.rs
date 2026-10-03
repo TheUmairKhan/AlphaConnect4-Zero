@@ -1,6 +1,7 @@
 mod board;
 mod env;
 mod mcts;
+mod minimax;
 pub mod model;
 mod training;
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -21,6 +21,7 @@ use crate::{
     model::zeronet::{ZeroNet, ZeroNetConfig},
     training::{
         accelerator,
+        arena,
         config::TrainingConfig,
         generator::generate_self_play_games,
         l2::squared_l2,
@@ -37,6 +38,7 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
     let mut optimizer = AdamConfig::new().init::<B, ZeroNet<B>>();
     let replay = (Mutex::new(ReplayBuffer::new(config.training.replay_capacity_games)), Condvar::new());
     let pending_model = Mutex::new(None::<(usize, ZeroNet<B::InnerBackend>)>);
+    let self_play_gate = Mutex::new(());
     let games_completed = AtomicUsize::new(0);
     let positions_generated = AtomicUsize::new(0);
     let mut rng = rand::rng();
@@ -57,6 +59,7 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
                     request_receiver,
                     config.self_play.threads,
                     |boards| {
+                        let _running = self_play_gate.lock().unwrap();
                         if let Some((step, latest)) = pending_model.lock().unwrap().take() {
                             policy = ZeroNetPolicy::new(latest, device.clone());
                             model_step = step;
@@ -106,11 +109,11 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
                 let forward_elapsed = forward_started.elapsed();
                 let loss_started = Instant::now();
                 let log_policy = log_softmax(logits, 1);
-                let policy_loss = -(policies.clone() * log_policy.clone()).sum_dim(1).mean();
+                let policy_loss = -(policies * log_policy.clone()).sum_dim(1).mean();
                 let error = predictions - values;
                 let value_loss = (error.clone() * error.clone()).mean();
                 let metrics = StepMetrics::from_batch(
-                    step, &policy_loss, &value_loss, log_policy, policies, error,
+                    step, &policy_loss, &value_loss, log_policy, error,
                 );
                 let loss = policy_loss + value_loss
                     + squared_l2(&model, device) * config.training.l2_coefficient;
@@ -137,6 +140,22 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
                 if step % config.self_play.model_refresh_per_updates == 0 {
                     *pending_model.lock().unwrap() = Some((step, model.valid()));
                     println!("published evaluator model at update {step}");
+                }
+                if step % config.evaluation.every_updates == 0 {
+                    let _paused = self_play_gate.lock().unwrap();
+                    println!("evaluating model from update {step} against minimax depths {:?}", config.evaluation.depths);
+                    let evaluation_started = Instant::now();
+                    let policy = ZeroNetPolicy::new(model.valid(), device.clone());
+                    let summaries = arena::evaluate(&policy, config);
+                    for summary in &summaries {
+                        println!(
+                            "  depth {}: {}W/{}L/{}D, score {:.3}, elo {:+.0} (first {:.3}, second {:.3})",
+                            summary.depth, summary.wins, summary.losses, summary.draws, summary.score_rate(),
+                            summary.elo(), summary.first_player_score_rate(), summary.second_player_score_rate(),
+                        );
+                    }
+                    metrics_logger.record_evaluation(step, &summaries)?;
+                    println!("evaluation finished in {:.1}s", evaluation_started.elapsed().as_secs_f32());
                 }
                 if step % config.training.checkpoint_every_updates == 0
                     || step == config.training.total_updates

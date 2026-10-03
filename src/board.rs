@@ -157,6 +157,13 @@ impl Board {
         self.current_player
     }
 
+    pub fn pieces(&self, player: Player) -> u64 {
+        match player {
+            Player::Red => self.red.0,
+            Player::Yellow => self.yellow.0,
+        }
+    }
+
     pub fn encode_state(&self) -> [[[f32; 7]; 6]; 2] {
         let (current, opponent) = match self.current_player {
             Player::Red => (self.red.0, self.yellow.0),
