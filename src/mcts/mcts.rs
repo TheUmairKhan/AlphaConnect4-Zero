@@ -76,12 +76,13 @@ use super::{evaluation::LeafEvaluator, policy::NetworkTiming};
         }
 
         pub async fn select_action<R: Rng + ?Sized>(&mut self, temperature: f32, rng: &mut R) -> (usize, [f32; 7]) {
-            let policy = self.target_policy(temperature);
+            let visit_policy = self.target_policy(1.0);
+            let sampling_policy = self.target_policy(temperature);
             let draw = rng.random::<f32>();
             let mut cumulative = 0.0;
             let mut action = 0;
 
-            for (column, &probability) in policy.iter().enumerate() {
+            for (column, &probability) in sampling_policy.iter().enumerate() {
                 if probability > 0.0 {
                     action = column;
                     cumulative += probability;
@@ -92,7 +93,7 @@ use super::{evaluation::LeafEvaluator, policy::NetworkTiming};
             }
 
             self.advance_root(action).await;
-            (action, policy)
+            (action, visit_policy)
         }
 
         pub fn best_action(&self) -> usize {
@@ -299,5 +300,25 @@ mod tests {
 
         block_on(search.advance_root(1));
         assert_eq!(calls.get(), 3);
+    }
+
+    #[test]
+    fn select_action_returns_raw_visit_distribution_regardless_of_temperature() {
+        let calls = Rc::new(Cell::new(0));
+        let mut search = block_on(MCTS::new(Connect4Env::new(), CountingEvaluator(calls), 50, 1.0));
+        block_on(search.search());
+
+        let root = &search.nodes[search.root_idx];
+        let visits: Vec<f32> = root.children
+            .iter()
+            .map(|child| child.map_or(0.0, |idx| search.nodes[idx].visits as f32))
+            .collect();
+        let total: f32 = visits.iter().sum();
+
+        let (_, policy) = block_on(search.select_action(0.1, &mut rand::rng()));
+
+        for (probability, visits) in policy.iter().zip(visits) {
+            assert!((probability - visits / total).abs() < 1e-6);
+        }
     }
 }
