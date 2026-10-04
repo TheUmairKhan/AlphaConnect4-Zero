@@ -35,6 +35,8 @@ pub struct TrainerConfig {
 
 #[derive(Deserialize)]
 pub struct EvaluationConfig {
+    pub threads: usize,
+    pub games_per_thread: usize,
     pub every_updates: usize,
     pub depths: Vec<u32>,
     pub games: usize,
@@ -86,8 +88,12 @@ impl TrainingConfig {
             return Err("replay_capacity_games is too small to hold one batch".into());
         }
         let evaluation = &self.evaluation;
-        if evaluation.every_updates == 0 || evaluation.simulations == 0 {
-            return Err("evaluation every_updates and simulations must be positive".into());
+        if evaluation.threads == 0
+            || evaluation.games_per_thread == 0
+            || evaluation.every_updates == 0
+            || evaluation.simulations == 0
+        {
+            return Err("evaluation threads, games_per_thread, every_updates, and simulations must be positive".into());
         }
         if evaluation.games < 2 {
             return Err("evaluation games must be at least 2 so the model plays both first and second".into());

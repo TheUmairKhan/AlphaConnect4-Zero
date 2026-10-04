@@ -11,6 +11,8 @@ temperature_end = 0.1
 temperature_decay_moves = 10
 
 [evaluation]
+threads = 8
+games_per_thread = 16
 every_updates = 10
 depths = [2, 4, 6]
 games = 200

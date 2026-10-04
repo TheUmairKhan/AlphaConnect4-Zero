@@ -151,7 +151,7 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
                     println!("evaluating model from update {step} against minimax depths {:?}", config.evaluation.depths);
                     let evaluation_started = Instant::now();
                     let policy = ZeroNetPolicy::new(model.valid(), device.clone());
-                    let summaries = arena::evaluate(&policy, config);
+                    let summaries = arena::evaluate(config, |boards| policy.evaluate(boards));
                     for summary in &summaries {
                         println!(
                             "  depth {}: {}W/{}L/{}D, score {:.3}, elo {:+.0} (first {:.3}, second {:.3})",

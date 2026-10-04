@@ -2,14 +2,14 @@ use std::{
     cell::RefCell, future::Future, pin::Pin, rc::Rc, sync::{
         atomic::{AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender},
-    }, task::{Context, Waker}, thread,
+    }, thread,
 };
 
-use futures::channel::oneshot;
-
-use crate::{board::Board, mcts::evaluation::{BatchRequest, BatchingClient, EvalOutput}};
-
-use crate::config::TrainingConfig;
+use crate::{
+    config::TrainingConfig,
+    mcts::evaluation::{BatchingClient, WorkerMessage},
+    training::accelerator::worker::{LeafQueue, drive_games},
+};
 
 use super::self_play::{SelfPlayGame, self_play};
 
@@ -21,7 +21,7 @@ pub fn generate_self_play_games<F, G>(
     mut on_game: G,
 )
 where
-    F: FnOnce(Receiver<BatchRequest>),
+    F: FnOnce(Receiver<WorkerMessage>),
     G: FnMut(usize, SelfPlayGame) + Send,
 {
     let worker_count = config.self_play.threads;
@@ -42,30 +42,13 @@ where
             let next_game = &next_game;
             scope.spawn(move || {
                 let queue = Rc::new(RefCell::new(Vec::new()));
-                let mut games: Vec<Pin<Box<dyn Future<Output = ()> + '_>>> = (0..config.self_play.games_per_thread)
+                let games = (0..config.self_play.games_per_thread)
                     .map(|_| {
-                        let queue = queue.clone();
-                        let completed_sender = completed_sender.clone();
-                        Box::pin(play_games(queue, config, next_game, completed_sender))
+                        Box::pin(play_games(queue.clone(), config, next_game, completed_sender.clone()))
                             as Pin<Box<dyn Future<Output = ()>>>
                     })
                     .collect();
-
-                let mut context = Context::from_waker(Waker::noop());
-                let (reply_sender, reply_receiver) = mpsc::sync_channel(1);
-                loop {
-                    for game in &mut games {
-                        let _ = game.as_mut().poll(&mut context);
-                    }
-
-                    let (boards, senders): (Vec<_>, Vec<_>) = queue.borrow_mut().drain(..).unzip();
-                    request_sender.send(BatchRequest { boards, sender: reply_sender.clone() })
-                        .expect("evaluation request queue closed");
-                    let outputs = reply_receiver.recv().expect("evaluation reply channel closed");
-                    for (sender, output) in senders.into_iter().zip(outputs) {
-                        let _ = sender.send(output);
-                    }
-                }
+                drive_games(games, &queue, &request_sender);
             });
         }
         drop(request_sender);
@@ -75,7 +58,7 @@ where
 }
 
 async fn play_games(
-    queue: Rc<RefCell<Vec<(Board, oneshot::Sender<EvalOutput>)>>>,
+    queue: Rc<LeafQueue>,
     config: &TrainingConfig,
     next_game: &AtomicUsize,
     completed_sender: SyncSender<(usize, SelfPlayGame)>,

@@ -34,6 +34,11 @@ pub struct BatchRequest {
     pub boards: Vec<Board>,
     pub sender: SyncSender<Vec<EvalOutput>>,
 }
+
+pub enum WorkerMessage {
+    Batch(BatchRequest),
+    Finished,
+}
 pub struct BatchingClient {
     queue: Rc<RefCell<Vec<(Board, oneshot::Sender<EvalOutput>)>>>,
     timing: Cell<NetworkTiming>,
