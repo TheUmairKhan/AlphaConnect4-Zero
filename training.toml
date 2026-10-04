@@ -24,6 +24,7 @@ c_puct = 1.0
 [model]
 hidden_size = 64
 num_res_blocks = 11
+# initial_checkpoint = "checkpoints/model-step-3200.mpk"
 
 [training]
 # Train continuously from completed self-play games until this many updates finish.

@@ -20,6 +20,7 @@ pub struct SearchConfig {
 pub struct ModelConfig {
     pub hidden_size: usize,
     pub num_res_blocks: usize,
+    pub initial_checkpoint: Option<String>,
 }
 
 #[derive(Deserialize)]

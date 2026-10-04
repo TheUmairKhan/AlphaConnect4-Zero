@@ -39,6 +39,12 @@ use super::{
 pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> Result<(), Box<dyn Error>> {
     let started = Instant::now();
     let mut model = ZeroNetConfig::new(2, config.model.hidden_size, config.model.num_res_blocks).init::<B>(device);
+    if let Some(path) = &config.model.initial_checkpoint {
+        model = model
+            .load_file(path, &DefaultRecorder::new(), device)
+            .map_err(|error| format!("failed to load initial checkpoint {path}: {error}"))?;
+        println!("loaded initial model from {path}");
+    }
     let initial_model = model.valid();
     let mut optimizer = AdamConfig::new().init::<B, ZeroNet<B>>();
     let replay = (Mutex::new(ReplayBuffer::new(config.training.replay_capacity_games)), Condvar::new());
