@@ -3,7 +3,7 @@ use std::{
     fs,
     path::Path,
     process,
-    sync::{Condvar, Mutex, atomic::{AtomicUsize, Ordering}},
+    sync::{Condvar, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}, mpsc},
     thread,
     time::Instant,
 };
@@ -43,7 +43,8 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
     let mut optimizer = AdamConfig::new().init::<B, ZeroNet<B>>();
     let replay = (Mutex::new(ReplayBuffer::new(config.training.replay_capacity_games)), Condvar::new());
     let pending_model = Mutex::new(None::<(usize, ZeroNet<B::InnerBackend>)>);
-    let self_play_gate = Mutex::new(());
+    let evaluating = AtomicBool::new(false);
+    let (evaluation_sender, evaluation_receiver) = mpsc::channel::<(usize, Vec<arena::MatchSummary>)>();
     let games_completed = AtomicUsize::new(0);
     let positions_generated = AtomicUsize::new(0);
     let mut rng = rand::rng();
@@ -64,7 +65,6 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
                     request_receiver,
                     config.self_play.threads,
                     |boards| {
-                        let _running = self_play_gate.lock().unwrap();
                         if let Some((step, latest)) = pending_model.lock().unwrap().take() {
                             policy = ZeroNetPolicy::new(latest, device.clone());
                             model_step = step;
@@ -146,21 +146,33 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
                     *pending_model.lock().unwrap() = Some((step, model.valid()));
                     println!("published evaluator model at update {step}");
                 }
+                for (evaluated_step, summaries) in evaluation_receiver.try_iter() {
+                    metrics_logger.record_evaluation(evaluated_step, &summaries)?;
+                }
                 if step % config.evaluation.every_updates == 0 {
-                    let _paused = self_play_gate.lock().unwrap();
-                    println!("evaluating model from update {step} against minimax depths {:?}", config.evaluation.depths);
-                    let evaluation_started = Instant::now();
-                    let policy = ZeroNetPolicy::new(model.valid(), device.clone());
-                    let summaries = arena::evaluate(config, |boards| policy.evaluate(boards));
-                    for summary in &summaries {
-                        println!(
-                            "  depth {}: {}W/{}L/{}D, score {:.3}, elo {:+.0} (first {:.3}, second {:.3})",
-                            summary.depth, summary.wins, summary.losses, summary.draws, summary.score_rate(),
-                            summary.elo(), summary.first_player_score_rate(), summary.second_player_score_rate(),
-                        );
+                    if evaluating.swap(true, Ordering::AcqRel) {
+                        println!("skipping evaluation at update {step}; previous evaluation still running");
+                    } else {
+                        let evaluation_model = model.valid();
+                        let evaluation_sender = evaluation_sender.clone();
+                        let evaluating = &evaluating;
+                        scope.spawn(move || {
+                            let policy = ZeroNetPolicy::new(evaluation_model, device.clone());
+                            println!("evaluating model from update {step} against minimax depths {:?}", config.evaluation.depths);
+                            let evaluation_started = Instant::now();
+                            let summaries = arena::evaluate(config, |boards| policy.evaluate(boards));
+                            for summary in &summaries {
+                                println!(
+                                    "  depth {}: {}W/{}L/{}D, score {:.3}, elo {:+.0} (first {:.3}, second {:.3})",
+                                    summary.depth, summary.wins, summary.losses, summary.draws, summary.score_rate(),
+                                    summary.elo(), summary.first_player_score_rate(), summary.second_player_score_rate(),
+                                );
+                            }
+                            println!("evaluation of update {step} finished in {:.1}s", evaluation_started.elapsed().as_secs_f32());
+                            let _ = evaluation_sender.send((step, summaries));
+                            evaluating.store(false, Ordering::Release);
+                        });
                     }
-                    metrics_logger.record_evaluation(step, &summaries)?;
-                    println!("evaluation finished in {:.1}s", evaluation_started.elapsed().as_secs_f32());
                 }
                 if step % config.training.checkpoint_every_updates == 0
                     || step == config.training.total_updates
