@@ -3,11 +3,7 @@ use std::{
     future::Future,
     pin::Pin,
     rc::Rc,
-    sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
-    },
+    sync::{Mutex, mpsc},
     thread,
 };
 
@@ -128,19 +124,19 @@ where
 {
     let evaluation = &config.evaluation;
     let summaries = Mutex::new(evaluation.depths.iter().map(|&depth| MatchSummary::new(depth)).collect::<Vec<_>>());
-    let next_game = AtomicUsize::new(0);
+    let total = evaluation.depths.len() * evaluation.games;
     let (request_sender, request_receiver) = mpsc::sync_channel(evaluation.threads);
 
     thread::scope(|scope| {
-        for _ in 0..evaluation.threads {
+        for thread_index in 0..evaluation.threads {
             let request_sender = request_sender.clone();
-            let next_game = &next_game;
             let summaries = &summaries;
             scope.spawn(move || {
                 let queue = Rc::new(RefCell::new(Vec::new()));
-                let games = (0..evaluation.games_per_thread)
-                    .map(|_| {
-                        Box::pin(play_games(queue.clone(), config, next_game, summaries))
+                let games = (thread_index..total)
+                    .step_by(evaluation.threads)
+                    .map(|index| {
+                        Box::pin(play_indexed_game(queue.clone(), config, index, summaries))
                             as Pin<Box<dyn Future<Output = ()>>>
                     })
                     .collect();
@@ -154,26 +150,18 @@ where
     summaries.into_inner().unwrap()
 }
 
-async fn play_games(
+async fn play_indexed_game(
     queue: Rc<LeafQueue>,
     config: &TrainingConfig,
-    next_game: &AtomicUsize,
+    index: usize,
     summaries: &Mutex<Vec<MatchSummary>>,
 ) {
     let evaluation = &config.evaluation;
-    let total = evaluation.depths.len() * evaluation.games;
-
-    loop {
-        let index = next_game.fetch_add(1, Ordering::Relaxed);
-        if index >= total {
-            return;
-        }
-        let depth_index = index / evaluation.games;
-        let mcts_player = if index % evaluation.games % 2 == 0 { Player::Red } else { Player::Yellow };
-        let client = BatchingClient::new(queue.clone());
-        let result = play_game(&client, config, evaluation.depths[depth_index], mcts_player).await;
-        summaries.lock().unwrap()[depth_index].record(result, mcts_player);
-    }
+    let depth_index = index / evaluation.games;
+    let mcts_player = if index % evaluation.games % 2 == 0 { Player::Red } else { Player::Yellow };
+    let client = BatchingClient::new(queue);
+    let result = play_game(&client, config, evaluation.depths[depth_index], mcts_player).await;
+    summaries.lock().unwrap()[depth_index].record(result, mcts_player);
 }
 
 async fn play_game<E: LeafEvaluator>(
@@ -271,7 +259,6 @@ mod tests {
         let mut config = config(5);
         config.evaluation.depths = vec![1, 2];
         config.evaluation.threads = 3;
-        config.evaluation.games_per_thread = 2;
 
         let summaries = evaluate(&config, uniform);
 
@@ -283,12 +270,10 @@ mod tests {
     }
 
     #[test]
-    fn finishes_when_game_slots_outnumber_games() {
+    fn finishes_when_threads_outnumber_games() {
         let mut config = config(3);
         config.evaluation.depths = vec![1];
         config.evaluation.threads = 4;
-        config.evaluation.games_per_thread = 4;
-        let slots = config.evaluation.threads * config.evaluation.games_per_thread;
 
         let mut batch_sizes = Vec::new();
         let summaries = evaluate(&config, |boards| {
@@ -297,6 +282,6 @@ mod tests {
         });
 
         assert_eq!(summaries[0].games(), 3);
-        assert!(batch_sizes.iter().all(|&size| size > 0 && size <= slots));
+        assert!(batch_sizes.iter().all(|&size| size > 0 && size <= 3));
     }
 }
