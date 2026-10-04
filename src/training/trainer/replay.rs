@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use burn::prelude::*;
-use rand::{Rng, seq::index};
+use rand::{Rng, RngExt, seq::index};
 
 use crate::training::self_play::self_play::TrainingExample;
 
@@ -50,7 +50,8 @@ impl ReplayBuffer {
         index::sample(rng, self.positions, batch_size).iter().map(|index| {
             let game_idx = game_ends.partition_point(|&end| end <= index);
             let game_start = if game_idx == 0 { 0 } else { game_ends[game_idx - 1] };
-            self.games[game_idx][index - game_start].clone()
+            let example = &self.games[game_idx][index - game_start];
+            if rng.random_bool(0.5) { example.mirrored() } else { example.clone() }
         }).collect()
     }
 }

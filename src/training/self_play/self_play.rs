@@ -16,6 +16,19 @@ pub struct TrainingExample {
     pub value: f32,
 }
 
+impl TrainingExample {
+    pub fn mirrored(&self) -> Self {
+        let mut example = self.clone();
+        for plane in &mut example.state {
+            for row in plane {
+                row.reverse();
+            }
+        }
+        example.policy.reverse();
+        example
+    }
+}
+
 pub struct MoveTiming {
     pub total: Duration,
     pub search: Duration,
