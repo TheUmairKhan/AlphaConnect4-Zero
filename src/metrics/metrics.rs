@@ -7,7 +7,7 @@ use std::{
 
 use burn::prelude::*;
 
-use crate::training::evaluation::arena::MatchSummary;
+use crate::training::evaluation::arena::{MatchSummary, Outcome};
 
 pub struct StepMetrics {
     pub step: usize,
@@ -75,7 +75,7 @@ impl MetricsLogger {
         let mut evaluation_csv = BufWriter::new(File::create(directory.join("evaluation.csv"))?);
         writeln!(
             evaluation_csv,
-            "step,depth,games,wins,losses,draws,win_pct,loss_pct,draw_pct,score_rate,elo,first_player_score_rate,second_player_score_rate"
+            "step,depth,games,wins,losses,draws,win_pct,loss_pct,draw_pct,score_rate,elo,first_player_score_rate,second_player_score_rate,empty_board_first,empty_board_second"
         )?;
         Ok(Self {
             csv,
@@ -108,7 +108,7 @@ impl MetricsLogger {
         for &summary in summaries {
             writeln!(
                 self.evaluation_csv,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 step,
                 summary.depth,
                 summary.games(),
@@ -122,6 +122,8 @@ impl MetricsLogger {
                 summary.elo(),
                 summary.first_player_score_rate(),
                 summary.second_player_score_rate(),
+                outcome_label(summary.empty_board_first),
+                outcome_label(summary.empty_board_second),
             )?;
             self.evaluations.push(Evaluation { step, summary });
         }
@@ -191,19 +193,24 @@ impl MetricsLogger {
     fn latest_table(&self) -> String {
         let step = self.evaluations.last().map_or(0, |e| e.step);
         let mut html = format!(
-            "<div class=\"card\" style=\"margin-bottom:16px\"><h2>Latest checkpoint: step {step}</h2><table><tr><th>Depth</th><th>Games</th><th>Win %</th><th>Loss %</th><th>Draw %</th><th>Score rate</th><th>Elo</th><th>First-player score</th><th>Second-player score</th></tr>"
+            "<div class=\"card\" style=\"margin-bottom:16px\"><h2>Latest checkpoint: step {step}</h2><table><tr><th>Depth</th><th>Games</th><th>Win %</th><th>Loss %</th><th>Draw %</th><th>Score rate</th><th>Elo</th><th>First-player score</th><th>Second-player score</th><th>Empty board (first)</th><th>Empty board (second)</th></tr>"
         );
         for e in self.evaluations.iter().filter(|e| e.step == step) {
             let s = &e.summary;
             html.push_str(&format!(
-                "<tr><td>{}</td><td>{}</td><td>{:.1}</td><td>{:.1}</td><td>{:.1}</td><td>{:.3}</td><td>{:+.0}</td><td>{:.3}</td><td>{:.3}</td></tr>",
+                "<tr><td>{}</td><td>{}</td><td>{:.1}</td><td>{:.1}</td><td>{:.1}</td><td>{:.3}</td><td>{:+.0}</td><td>{:.3}</td><td>{:.3}</td><td>{}</td><td>{}</td></tr>",
                 s.depth, s.games(), 100.0 * s.win_rate(), 100.0 * s.loss_rate(), 100.0 * s.draw_rate(),
                 s.score_rate(), s.elo(), s.first_player_score_rate(), s.second_player_score_rate(),
+                outcome_label(s.empty_board_first), outcome_label(s.empty_board_second),
             ));
         }
         html.push_str("</table></div>");
         html
     }
+}
+
+fn outcome_label(outcome: Option<Outcome>) -> &'static str {
+    outcome.map_or("", Outcome::label)
 }
 
 fn chart(title: &str, series: &[Series], y_range: Option<(f32, f32)>, markers: bool) -> String {

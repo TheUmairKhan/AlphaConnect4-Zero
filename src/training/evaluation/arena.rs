@@ -25,7 +25,24 @@ use crate::{
     },
 };
 
-use super::minimax;
+use super::{minimax, openings};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Win,
+    Loss,
+    Draw,
+}
+
+impl Outcome {
+    pub fn label(self) -> &'static str {
+        match self {
+            Outcome::Win => "win",
+            Outcome::Loss => "loss",
+            Outcome::Draw => "draw",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct MatchSummary {
@@ -36,6 +53,8 @@ pub struct MatchSummary {
     pub first_player_games: usize,
     pub first_player_wins: usize,
     pub first_player_draws: usize,
+    pub empty_board_first: Option<Outcome>,
+    pub empty_board_second: Option<Outcome>,
 }
 
 impl MatchSummary {
@@ -48,28 +67,42 @@ impl MatchSummary {
             first_player_games: 0,
             first_player_wins: 0,
             first_player_draws: 0,
+            empty_board_first: None,
+            empty_board_second: None,
         }
     }
 
-    fn record(&mut self, result: GameResult, mcts_player: Player) {
+    fn record(&mut self, result: GameResult, mcts_player: Player, from_empty_board: bool) {
         let went_first = mcts_player == Player::Red;
+        let outcome = match result {
+            GameResult::Win(winner) if winner == mcts_player => Outcome::Win,
+            GameResult::Draw => Outcome::Draw,
+            _ => Outcome::Loss,
+        };
         if went_first {
             self.first_player_games += 1;
         }
-        match result {
-            GameResult::Win(winner) if winner == mcts_player => {
+        match outcome {
+            Outcome::Win => {
                 self.wins += 1;
                 if went_first {
                     self.first_player_wins += 1;
                 }
             }
-            GameResult::Draw => {
+            Outcome::Draw => {
                 self.draws += 1;
                 if went_first {
                     self.first_player_draws += 1;
                 }
             }
-            _ => self.losses += 1,
+            Outcome::Loss => self.losses += 1,
+        }
+        if from_empty_board {
+            if went_first {
+                self.empty_board_first = Some(outcome);
+            } else {
+                self.empty_board_second = Some(outcome);
+            }
         }
     }
 
@@ -138,6 +171,7 @@ where
     let evaluation = &config.evaluation;
     let summaries = Mutex::new(evaluation.depths.iter().map(|&depth| MatchSummary::new(depth)).collect::<Vec<_>>());
     let total = evaluation.depths.len() * evaluation.games;
+    let openings = openings::suite(evaluation.games.div_ceil(2));
     let moves = AtomicUsize::new(0);
     let mut positions_evaluated = 0;
     let (request_sender, request_receiver) = mpsc::sync_channel(evaluation.threads);
@@ -147,12 +181,13 @@ where
             let request_sender = request_sender.clone();
             let summaries = &summaries;
             let moves = &moves;
+            let openings = &openings;
             scope.spawn(move || {
                 let queue = Rc::new(RefCell::new(Vec::new()));
                 let games = (thread_index..total)
                     .step_by(evaluation.threads)
                     .map(|index| {
-                        Box::pin(play_indexed_game(queue.clone(), config, index, summaries, moves))
+                        Box::pin(play_indexed_game(queue.clone(), config, openings, index, summaries, moves))
                             as Pin<Box<dyn Future<Output = ()>>>
                     })
                     .collect();
@@ -181,26 +216,33 @@ where
 async fn play_indexed_game(
     queue: Rc<LeafQueue>,
     config: &TrainingConfig,
+    openings: &[Vec<u8>],
     index: usize,
     summaries: &Mutex<Vec<MatchSummary>>,
     moves: &AtomicUsize,
 ) {
     let evaluation = &config.evaluation;
     let depth_index = index / evaluation.games;
-    let mcts_player = if index % evaluation.games % 2 == 0 { Player::Red } else { Player::Yellow };
+    let game_index = index % evaluation.games;
+    let opening = &openings[game_index / 2];
+    let mcts_player = if game_index % 2 == 0 { Player::Red } else { Player::Yellow };
     let client = BatchingClient::new(queue);
-    let result = play_game(&client, config, evaluation.depths[depth_index], mcts_player, moves).await;
-    summaries.lock().unwrap()[depth_index].record(result, mcts_player);
+    let result = play_game(&client, config, opening, evaluation.depths[depth_index], mcts_player, moves).await;
+    summaries.lock().unwrap()[depth_index].record(result, mcts_player, opening.is_empty());
 }
 
 async fn play_game<E: LeafEvaluator>(
     evaluator: &E,
     config: &TrainingConfig,
+    opening: &[u8],
     depth: u32,
     mcts_player: Player,
     moves: &AtomicUsize,
 ) -> GameResult {
     let mut env = Connect4Env::new();
+    for &column in opening {
+        env.step(column);
+    }
     let mut mcts = MCTS::new(env, evaluator, config.evaluation.simulations, config.search.c_puct).await;
 
     loop {
@@ -231,7 +273,7 @@ mod tests {
         config::TrainingConfig,
     };
 
-    use super::{MatchSummary, evaluate, play_game};
+    use super::{MatchSummary, Outcome, evaluate, play_game};
 
     struct UniformEvaluator;
 
@@ -257,10 +299,10 @@ mod tests {
     #[test]
     fn summary_splits_results_by_who_moved_first() {
         let mut summary = MatchSummary::new(4);
-        summary.record(GameResult::Win(Player::Red), Player::Red);
-        summary.record(GameResult::Draw, Player::Red);
-        summary.record(GameResult::Win(Player::Red), Player::Yellow);
-        summary.record(GameResult::Win(Player::Yellow), Player::Yellow);
+        summary.record(GameResult::Win(Player::Red), Player::Red, false);
+        summary.record(GameResult::Draw, Player::Red, false);
+        summary.record(GameResult::Win(Player::Red), Player::Yellow, false);
+        summary.record(GameResult::Win(Player::Yellow), Player::Yellow, false);
 
         assert_eq!((summary.wins, summary.losses, summary.draws), (2, 1, 1));
         assert_eq!(summary.games(), 4);
@@ -273,16 +315,51 @@ mod tests {
     #[test]
     fn elo_stays_finite_for_a_clean_sweep() {
         let mut summary = MatchSummary::new(2);
-        summary.record(GameResult::Win(Player::Red), Player::Red);
-        summary.record(GameResult::Win(Player::Yellow), Player::Yellow);
+        summary.record(GameResult::Win(Player::Red), Player::Red, false);
+        summary.record(GameResult::Win(Player::Yellow), Player::Yellow, false);
         assert!(summary.elo().is_finite());
+    }
+
+    #[test]
+    fn empty_board_results_are_kept_per_color() {
+        let mut summary = MatchSummary::new(4);
+        summary.record(GameResult::Win(Player::Red), Player::Red, true);
+        summary.record(GameResult::Draw, Player::Yellow, true);
+        summary.record(GameResult::Win(Player::Red), Player::Yellow, false);
+        assert_eq!(summary.empty_board_first, Some(Outcome::Win));
+        assert_eq!(summary.empty_board_second, Some(Outcome::Draw));
+        assert_eq!(summary.games(), 3);
+    }
+
+    #[test]
+    fn games_start_from_the_opening_position() {
+        let config = config(2);
+        let moves = AtomicUsize::new(0);
+        let opening = [3, 3, 2, 4];
+        let result = block_on(play_game(&UniformEvaluator, &config, &opening, 2, Player::Red, &moves));
+        assert_ne!(result, GameResult::Ongoing);
+        assert!(moves.load(Ordering::Relaxed) + opening.len() >= 7);
+    }
+
+    #[test]
+    fn each_opening_is_played_once_from_each_side() {
+        let mut config = config(4);
+        config.evaluation.depths = vec![1];
+        config.evaluation.threads = 2;
+
+        let summaries = evaluate(&config, uniform, |_| {});
+
+        assert_eq!(summaries[0].games(), 4);
+        assert_eq!(summaries[0].first_player_games, 2);
+        assert!(summaries[0].empty_board_first.is_some());
+        assert!(summaries[0].empty_board_second.is_some());
     }
 
     #[test]
     fn game_counts_every_move_played() {
         let config = config(2);
         let moves = AtomicUsize::new(0);
-        block_on(play_game(&UniformEvaluator, &config, 2, Player::Red, &moves));
+        block_on(play_game(&UniformEvaluator, &config, &[], 2, Player::Red, &moves));
         assert!(moves.load(Ordering::Relaxed) >= 7);
     }
 
@@ -308,7 +385,7 @@ mod tests {
     fn games_finish_with_mcts_on_either_side() {
         let config = config(2);
         for mcts_player in [Player::Red, Player::Yellow] {
-            let result = block_on(play_game(&UniformEvaluator, &config, 2, mcts_player, &AtomicUsize::new(0)));
+            let result = block_on(play_game(&UniformEvaluator, &config, &[], 2, mcts_player, &AtomicUsize::new(0)));
             assert_ne!(result, GameResult::Ongoing);
         }
     }

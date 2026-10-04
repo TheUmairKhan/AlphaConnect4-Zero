@@ -94,8 +94,8 @@ impl TrainingConfig {
         {
             return Err("evaluation threads, every_updates, and simulations must be positive".into());
         }
-        if evaluation.games < 2 {
-            return Err("evaluation games must be at least 2 so the model plays both first and second".into());
+        if evaluation.games < 2 || evaluation.games % 2 != 0 {
+            return Err("evaluation games must be even and at least 2 so each opening is played from both sides".into());
         }
         if evaluation.depths.is_empty() || evaluation.depths.contains(&0) {
             return Err("evaluation depths must be a non-empty list of positive depths".into());

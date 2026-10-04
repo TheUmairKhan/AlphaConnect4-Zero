@@ -3,7 +3,7 @@
 threads = 16
 games_per_thread = 64
 model_refresh_per_updates = 50
-simulations = 100
+simulations = 400
 dirichlet_alpha = 0.3
 dirichlet_epsilon = 0.25
 temperature_start = 1.0
@@ -13,10 +13,10 @@ temperature_decay_moves = 10
 [evaluation]
 threads = 8
 games_per_thread = 16
-every_updates = 10
+every_updates = 500
 depths = [2, 4, 6]
-games = 200
-simulations = 100
+games = 100
+simulations = 400
 
 [search]
 c_puct = 1.0
@@ -28,10 +28,10 @@ num_res_blocks = 6
 
 [training]
 # Train continuously from completed self-play games until this many updates finish.
-total_updates = 10000
+total_updates = 100000
 batch_size = 512
 # Keep complete recent games; batches sample uniformly from all their positions.
-replay_capacity_games = 200
+replay_capacity_games = 1000
 learning_rate = 0.001
 l2_coefficient = 0.0001
 checkpoint_every_updates = 100
