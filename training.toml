@@ -16,14 +16,14 @@ games_per_thread = 16
 every_updates = 10
 depths = [2, 4, 6]
 games = 200
-simulations = 1000
+simulations = 100
 
 [search]
 c_puct = 1.0
 
 [model]
 hidden_size = 64
-num_res_blocks = 11
+num_res_blocks = 6
 # initial_checkpoint = "checkpoints/model-step-3200.mpk"
 
 [training]
@@ -31,7 +31,7 @@ num_res_blocks = 11
 total_updates = 10000
 batch_size = 512
 # Keep complete recent games; batches sample uniformly from all their positions.
-replay_capacity_games = 1000
+replay_capacity_games = 200
 learning_rate = 0.001
 l2_coefficient = 0.0001
 checkpoint_every_updates = 100

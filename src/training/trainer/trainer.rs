@@ -5,7 +5,7 @@ use std::{
     process,
     sync::{Condvar, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}, mpsc},
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use burn::{
@@ -166,7 +166,24 @@ pub fn run<B: AutodiffBackend>(config: &TrainingConfig, device: &B::Device) -> R
                             let policy = ZeroNetPolicy::new(evaluation_model, device.clone());
                             println!("evaluating model from update {step} against minimax depths {:?}", config.evaluation.depths);
                             let evaluation_started = Instant::now();
-                            let summaries = arena::evaluate(config, |boards| policy.evaluate(boards));
+                            let mut last_report = evaluation_started;
+                            let summaries = arena::evaluate(config, |boards| policy.evaluate(boards), |progress| {
+                                if last_report.elapsed() < Duration::from_secs(10) {
+                                    return;
+                                }
+                                last_report = Instant::now();
+                                let results = progress.summaries
+                                    .iter()
+                                    .map(|summary| format!("d{} {}W/{}L/{}D", summary.depth, summary.wins, summary.losses, summary.draws))
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                let elapsed = evaluation_started.elapsed().as_secs_f32();
+                                println!(
+                                    "evaluation of update {step}: {}/{} games finished, {} moves played, {} positions evaluated ({:.0}/s), {elapsed:.0}s elapsed | {results}",
+                                    progress.games_finished, progress.total_games, progress.moves_played,
+                                    progress.positions_evaluated, progress.positions_evaluated as f32 / elapsed,
+                                );
+                            });
                             for summary in &summaries {
                                 println!(
                                     "  depth {}: {}W/{}L/{}D, score {:.3}, elo {:+.0} (first {:.3}, second {:.3})",

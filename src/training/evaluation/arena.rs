@@ -3,7 +3,11 @@ use std::{
     future::Future,
     pin::Pin,
     rc::Rc,
-    sync::{Mutex, mpsc},
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     thread,
 };
 
@@ -118,25 +122,37 @@ fn rate(points: f32, games: usize) -> f32 {
     if games == 0 { 0.0 } else { points / games as f32 }
 }
 
-pub fn evaluate<F>(config: &TrainingConfig, evaluate_batch: F) -> Vec<MatchSummary>
+pub struct EvaluationProgress {
+    pub games_finished: usize,
+    pub total_games: usize,
+    pub moves_played: usize,
+    pub positions_evaluated: usize,
+    pub summaries: Vec<MatchSummary>,
+}
+
+pub fn evaluate<F, P>(config: &TrainingConfig, mut evaluate_batch: F, mut on_progress: P) -> Vec<MatchSummary>
 where
     F: FnMut(&[Board]) -> Vec<EvalOutput>,
+    P: FnMut(&EvaluationProgress),
 {
     let evaluation = &config.evaluation;
     let summaries = Mutex::new(evaluation.depths.iter().map(|&depth| MatchSummary::new(depth)).collect::<Vec<_>>());
     let total = evaluation.depths.len() * evaluation.games;
+    let moves = AtomicUsize::new(0);
+    let mut positions_evaluated = 0;
     let (request_sender, request_receiver) = mpsc::sync_channel(evaluation.threads);
 
     thread::scope(|scope| {
         for thread_index in 0..evaluation.threads {
             let request_sender = request_sender.clone();
             let summaries = &summaries;
+            let moves = &moves;
             scope.spawn(move || {
                 let queue = Rc::new(RefCell::new(Vec::new()));
                 let games = (thread_index..total)
                     .step_by(evaluation.threads)
                     .map(|index| {
-                        Box::pin(play_indexed_game(queue.clone(), config, index, summaries))
+                        Box::pin(play_indexed_game(queue.clone(), config, index, summaries, moves))
                             as Pin<Box<dyn Future<Output = ()>>>
                     })
                     .collect();
@@ -144,7 +160,19 @@ where
             });
         }
         drop(request_sender);
-        accelerator::serve_requests(request_receiver, evaluation.threads, evaluate_batch);
+        accelerator::serve_requests(request_receiver, evaluation.threads, |boards| {
+            let outputs = evaluate_batch(boards);
+            positions_evaluated += boards.len();
+            let summaries = summaries.lock().unwrap().clone();
+            on_progress(&EvaluationProgress {
+                games_finished: summaries.iter().map(MatchSummary::games).sum(),
+                total_games: total,
+                moves_played: moves.load(Ordering::Relaxed),
+                positions_evaluated,
+                summaries,
+            });
+            outputs
+        });
     });
 
     summaries.into_inner().unwrap()
@@ -155,12 +183,13 @@ async fn play_indexed_game(
     config: &TrainingConfig,
     index: usize,
     summaries: &Mutex<Vec<MatchSummary>>,
+    moves: &AtomicUsize,
 ) {
     let evaluation = &config.evaluation;
     let depth_index = index / evaluation.games;
     let mcts_player = if index % evaluation.games % 2 == 0 { Player::Red } else { Player::Yellow };
     let client = BatchingClient::new(queue);
-    let result = play_game(&client, config, evaluation.depths[depth_index], mcts_player).await;
+    let result = play_game(&client, config, evaluation.depths[depth_index], mcts_player, moves).await;
     summaries.lock().unwrap()[depth_index].record(result, mcts_player);
 }
 
@@ -169,6 +198,7 @@ async fn play_game<E: LeafEvaluator>(
     config: &TrainingConfig,
     depth: u32,
     mcts_player: Player,
+    moves: &AtomicUsize,
 ) -> GameResult {
     let mut env = Connect4Env::new();
     let mut mcts = MCTS::new(env, evaluator, config.evaluation.simulations, config.search.c_puct).await;
@@ -181,6 +211,7 @@ async fn play_game<E: LeafEvaluator>(
             minimax::best_action(env.state(), depth)
         };
 
+        moves.fetch_add(1, Ordering::Relaxed);
         match env.step(action) {
             GameResult::Ongoing => mcts.advance_root(action as usize).await,
             result => break result,
@@ -190,6 +221,8 @@ async fn play_game<E: LeafEvaluator>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use futures::executor::block_on;
 
     use crate::{
@@ -246,10 +279,36 @@ mod tests {
     }
 
     #[test]
+    fn game_counts_every_move_played() {
+        let config = config(2);
+        let moves = AtomicUsize::new(0);
+        block_on(play_game(&UniformEvaluator, &config, 2, Player::Red, &moves));
+        assert!(moves.load(Ordering::Relaxed) >= 7);
+    }
+
+    #[test]
+    fn progress_reports_grow_while_games_run() {
+        let mut config = config(4);
+        config.evaluation.depths = vec![1, 2];
+        config.evaluation.threads = 2;
+
+        let mut reports = Vec::new();
+        let summaries = evaluate(&config, uniform, |progress| {
+            reports.push((progress.games_finished, progress.moves_played, progress.total_games, progress.positions_evaluated));
+        });
+
+        assert!(!reports.is_empty());
+        assert!(reports.iter().all(|&(_, _, total, _)| total == 8));
+        assert!(reports.windows(2).all(|pair| pair[0].0 <= pair[1].0 && pair[0].1 <= pair[1].1 && pair[0].3 < pair[1].3));
+        assert!(reports.last().unwrap().1 > 0);
+        assert_eq!(summaries.iter().map(MatchSummary::games).sum::<usize>(), 8);
+    }
+
+    #[test]
     fn games_finish_with_mcts_on_either_side() {
         let config = config(2);
         for mcts_player in [Player::Red, Player::Yellow] {
-            let result = block_on(play_game(&UniformEvaluator, &config, 2, mcts_player));
+            let result = block_on(play_game(&UniformEvaluator, &config, 2, mcts_player, &AtomicUsize::new(0)));
             assert_ne!(result, GameResult::Ongoing);
         }
     }
@@ -260,7 +319,7 @@ mod tests {
         config.evaluation.depths = vec![1, 2];
         config.evaluation.threads = 3;
 
-        let summaries = evaluate(&config, uniform);
+        let summaries = evaluate(&config, uniform, |_| {});
 
         assert_eq!(summaries.iter().map(|s| s.depth).collect::<Vec<_>>(), [1, 2]);
         for summary in summaries {
@@ -279,7 +338,7 @@ mod tests {
         let summaries = evaluate(&config, |boards| {
             batch_sizes.push(boards.len());
             uniform(boards)
-        });
+        }, |_| {});
 
         assert_eq!(summaries[0].games(), 3);
         assert!(batch_sizes.iter().all(|&size| size > 0 && size <= 3));
