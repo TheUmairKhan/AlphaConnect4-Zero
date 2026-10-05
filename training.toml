@@ -36,3 +36,7 @@ learning_rate = 0.001
 l2_coefficient = 0.0001
 checkpoint_every_updates = 100
 checkpoint_dir = "checkpoints"
+
+[play]
+model_path = "checkpoints/model-step-45000.mpk"
+simulations = 100

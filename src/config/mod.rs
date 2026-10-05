@@ -9,6 +9,13 @@ pub struct TrainingConfig {
     pub model: ModelConfig,
     pub training: TrainerConfig,
     pub evaluation: EvaluationConfig,
+    pub play: PlayConfig,
+}
+
+#[derive(Deserialize)]
+pub struct PlayConfig {
+    pub model_path: String,
+    pub simulations: u32,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +106,9 @@ impl TrainingConfig {
         }
         if evaluation.depths.is_empty() || evaluation.depths.contains(&0) {
             return Err("evaluation depths must be a non-empty list of positive depths".into());
+        }
+        if self.play.simulations == 0 {
+            return Err("play simulations must be positive".into());
         }
         Ok(())
     }

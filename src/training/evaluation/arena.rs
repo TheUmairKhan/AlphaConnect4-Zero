@@ -171,7 +171,7 @@ where
     let evaluation = &config.evaluation;
     let summaries = Mutex::new(evaluation.depths.iter().map(|&depth| MatchSummary::new(depth)).collect::<Vec<_>>());
     let total = evaluation.depths.len() * evaluation.games;
-    let openings = openings::suite(evaluation.games.div_ceil(2));
+    let openings = openings::suite(evaluation.games / 2);
     let moves = AtomicUsize::new(0);
     let mut positions_evaluated = 0;
     let (request_sender, request_receiver) = mpsc::sync_channel(evaluation.threads);
@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn concurrent_evaluation_plays_every_game_for_every_depth() {
-        let mut config = config(5);
+        let mut config = config(6);
         config.evaluation.depths = vec![1, 2];
         config.evaluation.threads = 3;
 
@@ -400,16 +400,16 @@ mod tests {
 
         assert_eq!(summaries.iter().map(|s| s.depth).collect::<Vec<_>>(), [1, 2]);
         for summary in summaries {
-            assert_eq!(summary.games(), 5);
+            assert_eq!(summary.games(), 6);
             assert_eq!(summary.first_player_games, 3);
         }
     }
 
     #[test]
     fn finishes_when_threads_outnumber_games() {
-        let mut config = config(3);
+        let mut config = config(4);
         config.evaluation.depths = vec![1];
-        config.evaluation.threads = 4;
+        config.evaluation.threads = 5;
 
         let mut batch_sizes = Vec::new();
         let summaries = evaluate(&config, |boards| {
@@ -417,7 +417,7 @@ mod tests {
             uniform(boards)
         }, |_| {});
 
-        assert_eq!(summaries[0].games(), 3);
-        assert!(batch_sizes.iter().all(|&size| size > 0 && size <= 3));
+        assert_eq!(summaries[0].games(), 4);
+        assert!(batch_sizes.iter().all(|&size| size > 0 && size <= 4));
     }
 }

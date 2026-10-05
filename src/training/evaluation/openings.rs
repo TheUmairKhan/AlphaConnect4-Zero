@@ -27,7 +27,7 @@ pub fn suite(count: usize) -> Vec<Vec<u8>> {
     openings
 }
 
-pub fn play(moves: &[u8]) -> Board {
+fn play(moves: &[u8]) -> Board {
     let mut board = Board::new();
     for &column in moves {
         board.place_piece(column);
