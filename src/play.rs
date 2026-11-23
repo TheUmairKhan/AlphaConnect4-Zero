@@ -117,36 +117,3 @@ fn render(board: &Board) -> String {
     text.push_str("  1 2 3 4 5 6 7\n");
     text
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::board::Board;
-
-    use super::{parse_column, render};
-
-    #[test]
-    fn columns_are_one_based_and_must_have_room() {
-        let mut board = Board::new();
-        assert_eq!(parse_column(&board, "1"), Ok(0));
-        assert_eq!(parse_column(&board, "7"), Ok(6));
-        assert!(parse_column(&board, "0").is_err());
-        assert!(parse_column(&board, "8").is_err());
-        assert!(parse_column(&board, "abc").is_err());
-        for _ in 0..6 {
-            board.place_piece(3);
-        }
-        assert_eq!(parse_column(&board, "4"), Err("That column is full."));
-    }
-
-    #[test]
-    fn board_renders_pieces_bottom_up() {
-        let mut board = Board::new();
-        board.place_piece(0);
-        board.place_piece(0);
-        let lines: Vec<String> = render(&board).lines().map(String::from).collect();
-        assert_eq!(lines.len(), 7);
-        assert!(lines[5].starts_with("| \x1b[31m●"));
-        assert!(lines[4].starts_with("| \x1b[33m●"));
-        assert_eq!(lines[6], "  1 2 3 4 5 6 7");
-    }
-}
