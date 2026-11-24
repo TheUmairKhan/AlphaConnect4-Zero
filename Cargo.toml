@@ -4,9 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-burn = { version = "0.21.0", features = ["autodiff", "metal"] }
+burn = { version = "0.21.0", features = ["autodiff"] }
 rand = "0.10.3"
 rand_distr = "0.6.0"
 serde = { version = "1.0", features = ["derive"] }
 futures = "0.3"
 toml = "1.1.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+burn = { version = "0.21.0", features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+burn = { version = "0.21.0", features = ["wgpu"] }
+
+[features]
+cuda = ["burn/cuda"]
+cpu = ["burn/ndarray"]
